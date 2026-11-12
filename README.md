@@ -58,4 +58,51 @@ Sheria za ulinzi wa historia:
 - Job inaonyesha vifaa vya sale iliyounganishwa. Vifaa vya ziada vina stock movement yao. Operating expenses na installation expenses zinaingia kwenye ripoti kwa njia tofauti.
 - SKU tofauti zinaweza kuundwa kwa kila toleo la bidhaa. Serial huandikwa wakati wa kuuza kifaa au kukitumia kama material ya ziada. Picha za upload zinahifadhiwa kwenye PostgreSQL, pamoja na rekodi zinazozitumia.
 
-Ankara na receipts ni nyaraka za ndani za duka. Mfumo hauna TRA/EFD integration, payment gateway, wala hosting ya umma. Kwa matumizi ya duka kwenye mtandao, tumia PostgreSQL ya production na HTTPS. `pg_dump` inahitajika kwenye server ili kupakua backup.
+Ankara na receipts ni nyaraka za ndani za duka. Mfumo hauna TRA/EFD integration wala payment gateway.
+
+## Deployment kwa Docker
+
+Project ina `Dockerfile` yenye hatua nne (`deps`, `builder`, `migrate`, `runner`) na `docker-compose.yml` yenye `app` + `db` (PostgreSQL 16). App inajenga kwa `output: "standalone"` na inasikiliza `3085` ndani ya container; imefungwa kwenye `127.0.0.1` pekee kwa sababu Caddy ndio inashughulikia TLS.
+
+Weka `.env` kwenye server (haipaswi kuwa git):
+
+```sh
+POSTGRES_DB=csolution_shop
+POSTGRES_USER=csolution
+POSTGRES_PASSWORD=<nywila-ndefu>
+CSOLUTION_ADMIN_EMAIL=you@example.com
+CSOLUTION_ADMIN_PASSWORD=<nywila-ndefu-isiyopungua-12>
+CSOLUTION_DEMO=0
+APP_PORT=3085
+```
+
+Kisha:
+
+```sh
+docker compose build
+docker compose --profile tools run --rm migrate   # schema + admin account
+docker compose up -d app
+docker compose ps
+docker compose logs -f app
+```
+
+- `migrate` ni one-shot; haiendeshwi na `up`. Endesha tena kila unapoongeza migration mpya kwenye `db/`.
+- Kuweka data ya demo kwenye database tupu: endesha `migrate` ukiwa na `CSOLUTION_DEMO=1`, kisha rudi kwenye `0` kwa app.
+- Backup: `docker compose exec -T db pg_dump -U csolution -d csolution_shop -Fc > csolution.dump`.
+- Kuanza upya na duka tupu: `docker compose down -v` kisha `migrate` na `up -d app`.
+
+Caddy block inayotumika kwenye server hii:
+
+```caddyfile
+CSolution.yunigo.online {
+	encode gzip
+	reverse_proxy 127.0.0.1:3085
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+}
+```
+
+Caddy inatoa certificate ya HTTPS kiotomatiki mara DNS inapoelekeza kwenye server.

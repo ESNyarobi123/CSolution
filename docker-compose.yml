@@ -1,0 +1,73 @@
+name: csolution
+
+# CSolution runs behind the Caddy reverse proxy that already owns ports
+# 80/443 on this server. The app binds to loopback only, so nothing is
+# exposed directly and TLS stays in one place.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-csolution_shop}
+      POSTGRES_USER: ${POSTGRES_USER:-csolution}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      # Keep the small server responsive: CSolution is a single-store shop.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - csolution-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-csolution} -d ${POSTGRES_DB:-csolution_shop}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  app:
+    build:
+      context: .
+      target: runner
+    image: csolution:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-csolution}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-csolution_shop}
+      CSOLUTION_ADMIN_EMAIL: ${CSOLUTION_ADMIN_EMAIL:?set CSOLUTION_ADMIN_EMAIL in .env}
+      CSOLUTION_ADMIN_PASSWORD: ${CSOLUTION_ADMIN_PASSWORD:?set CSOLUTION_ADMIN_PASSWORD in .env}
+      CSOLUTION_DEMO: ${CSOLUTION_DEMO:-0}
+      TZ: Africa/Dar_es_Salaam
+    ports:
+      - "127.0.0.1:${APP_PORT:-3085}:3085"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3085/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # Migrations and seeding. Run explicitly, never on `up`:
+  #   docker compose --profile tools run --rm migrate
+  migrate:
+    build:
+      context: .
+      target: migrate
+    image: csolution-migrate:latest
+    profiles: ["tools"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-csolution}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-csolution_shop}
+      CSOLUTION_ADMIN_EMAIL: ${CSOLUTION_ADMIN_EMAIL:?set CSOLUTION_ADMIN_EMAIL in .env}
+      CSOLUTION_ADMIN_PASSWORD: ${CSOLUTION_ADMIN_PASSWORD:?set CSOLUTION_ADMIN_PASSWORD in .env}
+      CSOLUTION_DEMO: ${CSOLUTION_DEMO:-0}
+
+volumes:
+  csolution-db:
