@@ -106,3 +106,15 @@ CSolution.yunigo.online {
 ```
 
 Caddy inatoa certificate ya HTTPS kiotomatiki mara DNS inapoelekeza kwenye server.
+
+Kwa update baadaye, endesha kwenye server:
+
+```sh
+cd /opt/csolution && ./scripts/deploy.sh
+```
+
+Script hiyo inafanya `git pull`, inajenga images upya, inatumia migrations mpya na kurestart app. Database container haiathiriki.
+
+## Tovuti iliyopandishwa
+
+`https://csolution.yunigo.online` inaendesha kwenye server ya `139.84.245.9` kupitia Caddy. App na database zinaendesha kama containers za Docker zenye `restart: unless-stopped`, na Docker/Caddy zinaanza wenyewe server ikirestart.
