@@ -41,6 +41,19 @@ ENV HOSTNAME=0.0.0.0
 RUN groupadd --system --gid 1001 nodejs \
  && useradd --system --uid 1001 --gid nodejs nextjs
 
+# The Settings page streams a `pg_dump` archive, so the runtime image needs the
+# PostgreSQL client. It must match the server major version, which is why it
+# comes from the PostgreSQL archive and not the older client bundled by Debian.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+ && install -d /usr/share/postgresql-common/pgdg \
+ && curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+ && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends postgresql-client-16 \
+ && apt-get purge -y --auto-remove curl gnupg \
+ && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
+
 COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
