@@ -11,7 +11,7 @@ import pg from "pg"
 // characters, matching the rule enforced by the staff form in the app.
 // Running this again resets those accounts to the supplied password.
 
-const roles = ["Admin", "Manager", "Cashier", "Storekeeper", "Technician"]
+const roles = ["Admin", "Front Office", "Manager", "Cashier", "Storekeeper", "Technician"]
 const password = process.env.CSOLUTION_TEAM_PASSWORD
 const team = (process.env.CSOLUTION_TEAM ?? "").split(",").map(entry => entry.trim()).filter(Boolean)
 

@@ -4,8 +4,9 @@ import { useEffect, useRef, useState } from "react"
 import { Box, CircleDollarSign, CopyPlus, CreditCard, FileText, ImagePlus, Minus, PackageOpen, Plus, ShoppingCart, Trash2, UploadCloud, Wallet } from "lucide-react"
 import { can, roles } from "@/lib/access"
 import { money, num, requestJSON } from "@/lib/format"
-import { customerTypes, jobStatuses, methods, productTypes, type Customer, type Expense, type Group, type Job, type JobDetail, type Line, type Person, type Product, type Purchase, type Quote, type Sale, type SaleDetail, type Snapshot, type Staff } from "@/lib/model"
+import { customerTypes, expenseCategories, jobStatuses, methods, productTypes, type BuyerType, type Customer, type Expense, type Group, type Job, type JobDetail, type Line, type Person, type Product, type Purchase, type Quote, type Sale, type SaleDetail, type Snapshot, type Staff } from "@/lib/model"
 import { ErrorLine, Field, Form, numberVal as n, opt, ProductPhoto, Select, val as v } from "./ui"
+import { CheckoutBuyer, buyerNameKey, isBuyerAccount } from "./checkout-buyer"
 import { SaleCatalog } from "./sale-catalog"
 
 export type Save = (data: object, message?: string) => Promise<{ id?: string; number?: string; refund?: number }>
@@ -104,13 +105,13 @@ export function ProductForm({ data, record, opening = false, close, save }: Form
   </Form>
 }
 
-export function ContactForm({ kind, record, close, save }: SimpleProps & { kind: "customer"|"supplier"; record?: Person|Customer }) {
+export function ContactForm({ kind, record, close, save, allowAgentCode = true }: SimpleProps & { kind: "customer"|"supplier"; record?: Person|Customer; allowAgentCode?: boolean }) {
   const customer = record && "kind" in record ? record : undefined
   const [type,setType] = useState(customer?.kind ?? "Retail")
   return <Form close={close} onSave={f=>save({ action:kind,id:record?.id,name:v(f,"name"),phone:v(f,"phone"),email:v(f,"email"),address:v(f,"address"),kind:type,code:v(f,"code") })}>
     <div className="form-grid"><ContactFields record={record} />
       {kind==="customer" && <Field label="Customer type"><Select value={type} onChange={e=>setType(e.target.value as Customer["kind"])}>{customerTypes.map(t=><option key={t}>{t}</option>)}</Select></Field>}
-      {kind==="customer" && type==="Agent" && <Field label="Agent code"><input name="code" defaultValue={customer?.code ?? ""} maxLength={60} /></Field>}
+      {kind==="customer" && type==="Agent" && allowAgentCode && <Field label="Agent code"><input name="code" defaultValue={customer?.code ?? ""} maxLength={60} /></Field>}
     </div>
   </Form>
 }
@@ -130,6 +131,8 @@ function ProductPicker({ products, add }: { products: Product[]; add: (product: 
 export function CartForm({ data, mode, quote, close, save }: FormProps & { mode: "sale"|"quote"; quote?: Quote }) {
   const productMap = new Map(data.products.map(p=>[p.id,p]))
   const [customerId,setCustomer] = useState(quote?.customer_id ?? "")
+  const [buyerType,setBuyerType] = useState<BuyerType>(quote?.buyer_type ?? "Walk-in")
+  const [buyerName,setBuyerName] = useState(quote?.customer_id ? quote.customer_name : "")
   const [lines,setLines] = useState<(Line & { key: string; name: string })[]>(()=>quote?.lines.map((line,i)=>({...line,key:String(i)})) ?? [])
   const [discount,setDiscount] = useState(quote?.discount ?? 0)
   const [tax,setTax] = useState(quote?.tax ?? 0)
@@ -142,13 +145,17 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
   const isSale = mode === "sale"
   const converting = isSale && Boolean(quote)
   const editPrice = can(data.user.role,"pricing") && !converting
-  const canAddInstallation = can(data.user.role,"jobs")
+  const requestApprovals = can(data.user.role,"requestApprovals")
+  const requestJobs = can(data.user.role,"requestJobs")
+  const scheduleJobs = can(data.user.role,"scheduleJobs")
+  const canAddInstallation = requestJobs || scheduleJobs
   const buyer = data.customers.find(c=>c.id===customerId)
-  const lookupPrice = (product?: Product) => product ? (buyer?.kind==="Agent" ? product.agent_price ?? product.price : product.price) : 0
+  const lookupPrice = (product?: Product) => product ? (buyerType==="Agent" ? product.agent_price ?? product.price : product.price) : 0
   const priceForLine = (line: Line) => line.price ?? lookupPrice(productMap.get(line.productId))
   const subtotal = lines.reduce((sum,line)=>sum+line.quantity*priceForLine(line),0)
   const total = subtotal - discount + tax
   const paid = payment==="full" ? total : payment==="partial" ? received ?? 0 : 0
+  const needsApproval = isSale && requestApprovals && (discount>0 || paid<total)
   const update = (key: string, patch: Partial<Line>)=>setLines(current=>current.map(line=>line.key===key ? {...line,...patch} : line))
   const products = data.products.filter(product=>product.active)
   const quantities = new Map<string,number>()
@@ -168,13 +175,24 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
     }
   }
   const discountError = discount > subtotal ? "Discount cannot exceed the subtotal." : ""
-  const customerError = isSale && lines.length>0 && payment!=="full" && !customerId ? "Choose a customer or agent for an unpaid balance." : ""
+  const namedBuyer = buyerType!=="Walk-in"
+  const enteredName = buyerName.trim()
+  const nameKey = buyerNameKey(enteredName)
+  const matchingAccounts = namedBuyer && !customerId && nameKey ? data.customers.filter(customer=>
+    isBuyerAccount(buyerType,customer) && buyerNameKey(customer.name)===nameKey) : []
+  const ambiguousName = matchingAccounts.length>1
+  const matchedBuyer = ambiguousName ? undefined : matchingAccounts[0]
+  const resolvedCustomerId = customerId || matchedBuyer?.id || null
+  const newBuyer = namedBuyer && !resolvedCustomerId && enteredName && !ambiguousName ? { name:enteredName } : undefined
+  const customerError = ambiguousName ? "More than one account has this name. Choose an existing account to continue." :
+    namedBuyer && !resolvedCustomerId && !newBuyer ? "Enter the buyer’s name." :
+    isSale && lines.length>0 && payment!=="full" && !namedBuyer ? "Choose a customer or agent for an unpaid balance." : ""
   function addProduct(product: Product, separate = false) {
     const key = String(++sequence.current)
     setLines(current=>{
       const inCart = current.reduce((sum,line)=>line.productId===product.id ? sum+line.quantity : sum,0)
       if (isSale && product.type==="Stocked" && inCart>=product.on_hand) return current
-      const matching = isSale && !separate ? current.find(line=>line.productId===product.id && line.price===undefined && !line.serial && line.quantity<100000) : undefined
+      const matching = !separate ? current.find(line=>line.productId===product.id && line.price===undefined && !line.serial && line.quantity<100000) : undefined
       if (matching) return current.map(line=>line===matching ? {...line,quantity:line.quantity+1} : line)
       if (current.length>=100) return current
       return [...current,{key,name:product.name,productId:product.id,quantity:1}]
@@ -185,58 +203,63 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
     if (!lines.length) throw new Error("Add at least one item.")
     if (stockError || discountError || customerError) throw new Error(stockError || discountError || customerError)
     const payload = {
-      customerId:customerId || null, discount, tax,
-      lines:lines.map(({key:_key,name:_name,...line})=>isSale && !converting ? {...line,expectedUnitPrice:priceForLine(line)} : line)
+      customerId:resolvedCustomerId, buyerType, newBuyer, discount, tax, expectedTotal:total,
+      lines:lines.map(({key:_key,name:_name,...line})=>!converting ? {...line,expectedUnitPrice:priceForLine(line)} : line)
     }
+    requestId.current ||= crypto.randomUUID()
     if (!isSale) {
-      await save({ action:"quote",...payload,id:quote?.id,quoteVersion:quote?.version,validUntil:opt(form,"validUntil") },quote ? "Quotation updated" : "Quotation created")
+      await save({ action:"quote",...payload,id:quote?.id,requestId:quote ? undefined : requestId.current,quoteVersion:quote?.version,validUntil:opt(form,"validUntil") },quote ? "Quotation updated" : "Quotation created")
       return
     }
     if (payment==="partial" && (paid<=0 || paid>=total)) throw new Error("Enter a partial payment below the sale total.")
-    requestId.current ||= crypto.randomUUID()
-    await save({
-      action:"sale",...payload,requestId:requestId.current,quoteId:quote?.id,quoteVersion:quote?.version,expectedTotal:total,paid,
+    const sale = {
+      action:"sale",...payload,requestId:requestId.current,quoteId:quote?.id,quoteVersion:quote?.version,paid,
       method:v(form,"method") || "Cash",reference:v(form,"reference"),dueDate:opt(form,"dueDate"),
       installation:canAddInstallation && installation ? { title:v(form,"title"),location:v(form,"location"),technicianId:opt(form,"technicianId"),scheduled:opt(form,"scheduled") } : undefined
-    },"Sale completed")
+    }
+    if (needsApproval) {
+      await save({action:"requestSaleApproval",sale,reason:v(form,"approvalReason")},"Approval requested")
+    } else {
+      await save(sale,"Sale completed")
+    }
   }
-  const customerField = <Field label="Customer or agent">
-    <Select value={customerId} disabled={converting} onChange={event=>setCustomer(event.target.value)}>
-      <option value="">Walk-in customer</option><PeopleOptions people={data.customers} />
-    </Select>
-  </Field>
+  const customerField = converting ? <p className="checkout-hint">{buyerType} · {quote?.customer_name}</p> :
+    <CheckoutBuyer type={buyerType} name={buyerName} account={buyer ?? matchedBuyer} ambiguousName={ambiguousName} customers={data.customers}
+      onType={type=>{setBuyerType(type);setCustomer("");setBuyerName("")}}
+      onName={name=>{setBuyerName(name);setCustomer("")}}
+      onSelect={customer=>{setBuyerName(customer.name);setCustomer(customer.id)}} />
   const adjustments = <div className="form-grid">
-    <Field label="Discount (TZS)"><input type="number" min="0" max="9999999999" value={discount} readOnly={!editPrice}
-      onChange={event=>setDiscount(event.target.valueAsNumber || 0)} /></Field>
-    <Field label="Tax (TZS)"><input type="number" min="0" max="9999999999" value={tax} readOnly={converting}
-      onChange={event=>setTax(event.target.valueAsNumber || 0)} /></Field>
+    {(editPrice || (isSale && requestApprovals && !converting)) && <Field label="Discount (TZS)"><input type="number" min="0" max="9999999999" value={discount}
+      onChange={event=>setDiscount(event.target.valueAsNumber || 0)} /></Field>}
+    {!requestApprovals && <Field label="Tax (TZS)"><input type="number" min="0" max="9999999999" value={tax} readOnly={converting}
+      onChange={event=>setTax(event.target.valueAsNumber || 0)} /></Field>}
   </div>
-  const cartItems = <div className={isSale ? "sale-cart-items" : "cart-list"}>
+  const cartItems = <div className="sale-cart-items">
     {!lines.length && <div className="cart-empty"><ShoppingCart size={19} /> Add products or services to this {isSale ? "sale" : "quotation"}.</div>}
     {lines.map(line=>{
       const product = productMap.get(line.productId)
       const price = priceForLine(line)
       const stocked = product?.type==="Stocked"
-      const canAddUnit = !stocked || (quantities.get(line.productId) ?? 0)<product.on_hand
+      const canAddUnit = !isSale || !stocked || (quantities.get(line.productId) ?? 0)<product.on_hand
       const quantityLabel = "Quantity for "+line.name
       const canEditQuantity = !converting && !line.serial
-      return <div className={isSale ? "sale-cart-line" : "cart-line"} key={line.key}>
+      return <div className="sale-cart-line" key={line.key}>
         <div className="cart-name">
           <div className="sale-line-identity">
-            {isSale && product && <ProductPhoto product={product} />}
+            {product && <ProductPhoto product={product} />}
             <div><strong>{line.name}</strong><small>{[product?.sku,stocked && isSale ? num(product.on_hand)+" "+product.unit+" in stock" : ""].filter(Boolean).join(" · ")}</small></div>
           </div>
           {isSale && !converting && stocked && line.quantity===1 && <input aria-label={"Serial number for "+line.name} placeholder="Serial (optional)"
             value={line.serial ?? ""} maxLength={100} onChange={event=>update(line.key,{serial:event.target.value})} />}
         </div>
-        <div className={isSale ? "sale-line-quantity" : undefined}>
-          <span className="sale-line-label">{isSale ? "Qty ("+(product?.unit ?? "unit")+")" : product?.unit ?? "Qty"}</span>
-          <div className={isSale ? "quantity-stepper" : undefined}>
-            {isSale && !converting && <button type="button" disabled={!canEditQuantity || line.quantity<=1}
+        <div className="sale-line-quantity">
+          <span className="sale-line-label">{"Qty ("+(product?.unit ?? "unit")+")"}</span>
+          <div className="quantity-stepper">
+            {!converting && <button type="button" disabled={!canEditQuantity || line.quantity<=1}
               aria-label={"Decrease "+line.name+" quantity"} onClick={()=>update(line.key,{quantity:line.quantity-1})}><Minus size={14} /></button>}
             <input aria-label={quantityLabel} type="number" min="1" max="100000" required value={line.quantity || ""} readOnly={!canEditQuantity}
               onChange={event=>update(line.key,{quantity:event.target.valueAsNumber || 0})} />
-            {isSale && !converting && <button type="button" disabled={!canEditQuantity || !canAddUnit || line.quantity>=100000}
+            {!converting && <button type="button" disabled={!canEditQuantity || !canAddUnit || line.quantity>=100000}
               aria-label={"Increase "+line.name+" quantity"} onClick={()=>update(line.key,{quantity:line.quantity+1})}><Plus size={14} /></button>}
           </div>
         </div>
@@ -244,7 +267,7 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
           readOnly={!editPrice} onChange={event=>update(line.key,{price:event.target.valueAsNumber || 0})} /></Field>
         <strong className="line-total">{money(line.quantity*price)}</strong>
         {!converting && <div className="sale-line-actions">
-          {isSale && product && <button className="icon-btn" type="button" disabled={!canAddUnit || lines.length>=100}
+          {product && <button className="icon-btn" type="button" disabled={!canAddUnit || lines.length>=100}
             aria-label={"Add a separate line for "+line.name} title="Add a separate line for another price or serial number"
             onClick={()=>addProduct(product,true)}><CopyPlus size={15} /></button>}
           <button className="icon-btn" aria-label={"Remove "+line.name} type="button"
@@ -254,31 +277,24 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
     })}
   </div>
 
-  if (!isSale) return <Form close={close} onSave={submit} label={quote ? "Save quotation" : "Create quotation"}>
-    {customerField}
-    <ProductPicker products={products} add={addProduct} />
-    {cartItems}{adjustments}
-    <div className="cart-total"><span>Total</span><strong>{money(total)}</strong></div>
-    <Field label="Valid until"><input name="validUntil" type="date" defaultValue={quote?.valid_until ?? ""}
-      min={quote?.valid_until && quote.valid_until < data.today ? quote.valid_until : data.today} /></Field>
-  </Form>
-
-  return <Form close={close} onSave={submit} label="Complete sale" busyLabel="Recording sale…"
+  const submitLabel = needsApproval ? "Request approval" : isSale ? "Complete sale" : quote ? "Save quotation" : "Create quotation"
+  return <Form close={close} onSave={submit} label={submitLabel} busyLabel={isSale ? "Recording sale…" : "Saving quotation…"}
     submitDisabled={!lines.length || Boolean(stockError || discountError || customerError)}
-    footerSummary={<><small>Sale total</small><strong>{money(total)}</strong>{payment!=="full"&&<span>Balance {money(Math.max(0,total-paid))}</span>}</>}>
+    footerSummary={<><small>{isSale ? "Sale total" : "Quotation total"}</small><strong>{money(total)}</strong>
+      {isSale && payment!=="full"&&<span>Balance {money(Math.max(0,total-paid))}</span>}</>}>
     <div className="checkout-layout">
       {converting ? <section className="sale-quote-source">
         <span className="metric-icon blue"><FileText size={19} /></span>
         <h3>Quotation {quote?.number}</h3><p>{quote?.customer_name}</p>
         {cartItems}<ErrorLine message={stockError} />
-      </section> : <SaleCatalog products={products} quantities={quantities} price={lookupPrice} add={addProduct} lineCount={lines.length}
+      </section> : <SaleCatalog products={products} quantities={quantities} price={lookupPrice} add={addProduct} lineCount={lines.length} trackStock={isSale}
         viewCart={()=>{ cartHeading.current?.scrollIntoView({block:"start"});cartHeading.current?.focus({preventScroll:true}) }} />}
 
       <section className="checkout-side" aria-label="Checkout">
         {!converting && <div className="checkout-card">
           <div className="checkout-section-title">
             <span className="metric-icon blue"><ShoppingCart size={19} /></span>
-            <div><h3 ref={cartHeading} tabIndex={-1}>Cart</h3><small aria-live="polite">{num(lines.length)} {lines.length===1 ? "line" : "lines"}</small></div>
+            <div><h3 ref={cartHeading} tabIndex={-1}>{isSale ? "Cart" : "Quotation items"}</h3><small aria-live="polite">{num(lines.length)} {lines.length===1 ? "line" : "lines"}</small></div>
           </div>
           {cartItems}
           <ErrorLine message={stockError} />
@@ -286,9 +302,11 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
         </div>}
 
         <div className="checkout-card">
-          <div className="checkout-section-title"><span className="metric-icon teal"><CreditCard size={19} /></span><h3>Customer &amp; payment</h3></div>
+          <div className="checkout-section-title"><span className="metric-icon teal"><CreditCard size={19} /></span><h3>{isSale ? "Buyer & payment" : "Quote recipient"}</h3></div>
           {customerField}
-          {buyer?.kind==="Agent" && <p className="checkout-hint">Agent prices apply where available.</p>}
+          {buyerType==="Agent" && !converting && <p className="checkout-hint">Agent prices apply where available.</p>}
+          <ErrorLine message={customerError} />
+          {isSale ? <>
           <fieldset className="payment-options">
             <legend>Payment timing</legend>
             {[["full","Pay in full"],["partial","Partial"],["credit","On credit"]].map(([value,label])=><label key={value}>
@@ -296,34 +314,37 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
               <span>{label}</span>
             </label>)}
           </fieldset>
-          <ErrorLine message={customerError} />
           <div className="form-grid">
             {payment!=="credit" && <Field label="Payment method"><Select name="method">{methods.map(method=><option key={method}>{method}</option>)}</Select></Field>}
-            {payment==="partial" && <Field label="Amount received (TZS)"><input name="paid" type="number" min="1" max={Math.max(0,total-1)}
+            {payment==="partial" && <Field label={requestApprovals ? "Proposed payment (TZS)" : "Amount received (TZS)"}><input name="paid" type="number" min="1" max={Math.max(0,total-1)}
               value={received ?? ""} onChange={event=>setReceived(event.target.value==="" ? null : event.target.valueAsNumber)} required /></Field>}
             {payment!=="full" && <Field label="Balance due date"><input name="dueDate" type="date" min={data.today} /></Field>}
             {payment!=="credit" && <Field label="Payment reference"><input name="reference" placeholder="Optional" /></Field>}
-          </div>
+          </div></> : <Field label="Valid until"><input name="validUntil" type="date" defaultValue={quote?.valid_until ?? ""}
+            min={quote?.valid_until && quote.valid_until < data.today ? quote.valid_until : data.today} /></Field>}
         </div>
 
         <div className="checkout-card">
-          <div className="checkout-section-title"><span className="metric-icon cyan"><Wallet size={19} /></span><h3>Order summary</h3></div>
-          {adjustments}
+          <div className="checkout-section-title"><span className="metric-icon cyan"><Wallet size={19} /></span><h3>{isSale ? "Order summary" : "Quotation summary"}</h3></div>
+          {(!requestApprovals || (isSale && !converting)) && adjustments}
           <ErrorLine message={discountError} />
           <dl className="sale-totals">
             <div><dt>Subtotal</dt><dd>{money(subtotal)}</dd></div>
             {discount>0 && <div><dt>Discount</dt><dd>−{money(discount)}</dd></div>}
             {tax>0 && <div><dt>Tax</dt><dd>{money(tax)}</dd></div>}
-            {payment!=="full" && <div><dt>Balance due</dt><dd>{money(Math.max(0,total-paid))}</dd></div>}
+            {isSale && payment!=="full" && <div><dt>Balance due</dt><dd>{money(Math.max(0,total-paid))}</dd></div>}
           </dl>
-          {canAddInstallation && <>
+          {needsApproval && <Field label="Reason for approval" hint="The sale will be ready to complete after an administrator approves these terms.">
+            <input name="approvalReason" maxLength={160} required placeholder="Why is the discount or balance needed?" />
+          </Field>}
+          {isSale && canAddInstallation && <>
             <label className="checkbox checkout-installation"><input type="checkbox" checked={installation}
-              onChange={event=>setInstallation(event.target.checked)} /> Create a linked installation job</label>
+              onChange={event=>setInstallation(event.target.checked)} /> {requestJobs ? "Request an installation" : "Create a linked installation job"}</label>
             {installation && <div className="form-grid">
               <Field label="Job title"><input name="title" required placeholder="Office network installation" /></Field>
-              <Field label="Installation location"><input name="location" /></Field>
-              <Field label="Scheduled date"><input name="scheduled" type="date" /></Field>
-              <Field label="Technician"><Select name="technicianId"><option value="">Assign later</option><PeopleOptions people={data.staff.filter(staff=>staff.role==="Technician"&&staff.active)} /></Select></Field>
+              <Field label="Installation location"><input name="location" required={requestJobs} /></Field>
+              <Field label={requestJobs ? "Preferred date" : "Scheduled date"}><input name="scheduled" type="date" min={requestJobs ? data.today : undefined} /></Field>
+              {scheduleJobs && <Field label="Technician"><Select name="technicianId"><option value="">Assign later</option><PeopleOptions people={data.staff.filter(staff=>staff.role==="Technician"&&staff.active)} /></Select></Field>}
             </div>}
           </>}
         </div>
@@ -376,14 +397,16 @@ export function PaymentForm({ sale, close, save }: SimpleProps & { sale: Sale })
   </Form>
 }
 
-export function ReturnForm({ detail, close, save }: SimpleProps & { detail: SaleDetail }) {
+export function ReturnForm({ detail, close, save, approval = false }: SimpleProps & { detail: SaleDetail; approval?: boolean }) {
   const available = detail.lines.filter(l=>l.returned<l.quantity)
   const [id,setId] = useState(available[0]?.id ?? "")
   const line = available.find(l=>l.id===id)
   const requestId = useRef("")
-  return <Form close={close} label="Record return" onSave={f=>{ requestId.current ||= crypto.randomUUID()
-    return save({ action:"return",requestId:requestId.current,saleId:detail.sale.id,lineId:id,quantity:n(f,"quantity"),reason:v(f,"reason"),restock:line?.type==="Stocked"&&f.has("restock") },"Return recorded")
+  return <Form close={close} label={approval ? "Request approval" : "Record return"} onSave={f=>{ requestId.current ||= crypto.randomUUID()
+    const item = {action:"return",requestId:requestId.current,saleId:detail.sale.id,lineId:id,quantity:n(f,"quantity"),reason:v(f,"reason"),restock:line?.type==="Stocked"&&f.has("restock")}
+    return approval ? save({action:"requestReturnApproval",item},"Return approval requested") : save(item,"Return recorded")
   }}>
+    {approval && <p className="detail-note">An administrator will review the return and any refund before they are recorded.</p>}
     <Field label="Sale item"><Select value={id} required onChange={e=>setId(e.target.value)}>{available.map(l=><option key={l.id} value={l.id}>{l.name} · {num(l.quantity-l.returned)} available</option>)}</Select></Field>
     <Field label="Quantity"><input name="quantity" type="number" min="1" max={line ? line.quantity-line.returned : 0} defaultValue={1} required /></Field>
     <Field label="Reason"><input name="reason" maxLength={160} required /></Field>
@@ -406,15 +429,36 @@ export function JobForm({ data, record, close, save }: FormProps & { record?: Jo
       <Field label="Technician"><Select name="technicianId" defaultValue={record?.technician_id ?? ""}><option value="">Assign later</option><PeopleOptions people={data.staff.filter(u=>u.role==="Technician" && (u.active || u.id===record?.technician_id))} /></Select></Field>
       <Field label="Location"><input name="location" defaultValue={record?.location} /></Field>
       <Field label="Scheduled date"><input name="scheduled" type="date" defaultValue={record?.scheduled ?? ""} /></Field>
-      <Field label="Status"><Select name="status" defaultValue={record?.status ?? "Scheduled"}>{jobStatuses.map(s=><option key={s}>{s}</option>)}</Select></Field>
+      <Field label="Status"><Select name="status" defaultValue={record?.status==="Requested" ? "Scheduled" : record?.status ?? "Scheduled"}>{jobStatuses.map(s=><option key={s}>{s}</option>)}</Select></Field>
     </div>
     <Field label="Work notes"><textarea name="notes" rows={3} defaultValue={record?.notes} /></Field>
   </Form>
 }
 
+export function InstallationRequestForm({ data, close, save }: FormProps) {
+  const [saleId,setSale] = useState("")
+  return <Form close={close} label="Send installation request" onSave={form=>save({
+    action:"installationRequest",title:v(form,"title"),customerId:opt(form,"customerId"),saleId:saleId || null,
+    location:v(form,"location"),notes:v(form,"notes"),scheduled:opt(form,"scheduled")
+  },"Installation requested")}>
+    <div className="form-grid">
+      <Field label="Work title"><input name="title" required maxLength={160} placeholder="Office Wi-Fi setup" /></Field>
+      <Field label="Linked sale"><Select value={saleId} onChange={event=>setSale(event.target.value)}>
+        <option value="">Standalone request</option>{data.sales.map(sale=><option key={sale.id} value={sale.id}>{sale.number} · {sale.customer_name}</option>)}
+      </Select></Field>
+      {!saleId && <Field label="Customer or agent"><Select name="customerId" required defaultValue="">{blank}<PeopleOptions people={data.customers} /></Select></Field>}
+      <Field label="Location"><input name="location" required maxLength={2000} /></Field>
+      <Field label="Preferred date"><input name="scheduled" type="date" min={data.today} /></Field>
+    </div>
+    <Field label="Work notes" hint={saleId ? "Add any equipment or instructions beyond the linked sale." : "List the equipment needed and any instructions for the technician."}>
+      <textarea name="notes" rows={4} maxLength={2000} />
+    </Field>
+  </Form>
+}
+
 export function JobStatusForm({ job, close, save }: SimpleProps & { job: Job }) {
   return <Form close={close} onSave={f=>save({action:"jobStatus",id:job.id,status:v(f,"status"),notes:v(f,"notes")},"Job updated")}>
-    <Field label="Status"><Select name="status" defaultValue={job.status}>{jobStatuses.map(s=><option key={s}>{s}</option>)}</Select></Field>
+    <Field label="Status"><Select name="status" defaultValue={job.status}>{jobStatuses.filter(status=>status!=="Requested").map(s=><option key={s}>{s}</option>)}</Select></Field>
     <Field label="Work notes"><textarea name="notes" rows={4} defaultValue={job.notes} /></Field>
   </Form>
 }
@@ -433,13 +477,19 @@ export function MaterialForm({ data, detail, close, save }: FormProps & { detail
 
 export function ExpenseForm({ data, job, record, close, save }: FormProps & { job?: Job; record?: Expense }) {
   return <Form close={close} label={record ? "Save expense" : "Record expense"} onSave={f=>save({action:"expense",id:record?.id,description:v(f,"description"),
-    amount:n(f,"amount"),incurred:v(f,"incurred"),jobId:opt(f,"jobId")},record ? "Expense updated" : "Expense recorded")}>
+    amount:n(f,"amount"),incurred:v(f,"incurred"),jobId:opt(f,"jobId"),category:v(f,"category"),method:opt(f,"method"),reference:v(f,"reference"),notes:v(f,"notes")},record ? "Expense updated" : "Expense recorded")}>
     <Field label="Description"><input name="description" defaultValue={record?.description} required maxLength={160} /></Field>
     <div className="form-grid">
       <Field label="Amount (TZS)"><input name="amount" type="number" min="1" max="9999999999" defaultValue={record?.amount} required /></Field>
       <Field label="Date incurred"><input name="incurred" type="date" defaultValue={record?.incurred ?? data.today} required /></Field>
     </div>
-    <Field label="Expense type"><Select name="jobId" defaultValue={record?.job_id ?? job?.id ?? ""}><option value="">General operating expense</option>{data.jobs.map(j=><option key={j.id} value={j.id}>{j.number} · {j.title}</option>)}</Select></Field>
+    <div className="form-grid">
+      <Field label="Category"><Select name="category" defaultValue={record?.category ?? "Other"}>{expenseCategories.map(category=><option key={category}>{category}</option>)}</Select></Field>
+      <Field label="Payment method"><Select name="method" defaultValue={record?.method ?? ""}><option value="">Unspecified</option>{methods.map(method=><option key={method}>{method}</option>)}</Select></Field>
+      <Field label="Related installation"><Select name="jobId" defaultValue={record?.job_id ?? job?.id ?? ""}><option value="">General operating expense</option>{data.jobs.map(j=><option key={j.id} value={j.id}>{j.number} · {j.title}</option>)}</Select></Field>
+      <Field label="Receipt or payment reference"><input name="reference" defaultValue={record?.reference} maxLength={160} placeholder="Optional" /></Field>
+    </div>
+    <Field label="Notes"><textarea name="notes" rows={3} maxLength={2000} defaultValue={record?.notes} placeholder="Optional" /></Field>
   </Form>
 }
 
@@ -468,7 +518,7 @@ export function StaffForm({ record, close, save }: SimpleProps & { record?: Staf
     <div className="form-grid">
       <Field label="Name"><input name="name" defaultValue={record?.name} required /></Field>
       <Field label="Email"><input name="email" type="email" defaultValue={record?.email} required /></Field>
-      <Field label="Role"><Select name="role" defaultValue={record?.role ?? "Cashier"}>{roles.map(r=><option key={r}>{r}</option>)}</Select></Field>
+      <Field label="Role"><Select name="role" defaultValue={record?.role ?? "Front Office"}>{roles.map(r=><option key={r}>{r}</option>)}</Select></Field>
       <Field label={record ? "New password" : "Temporary password"} hint={record ? "Leave blank to keep the current password." : "At least 12 characters."}>
         <input name="password" type="password" autoComplete="new-password" minLength={12} required={!record} />
       </Field>

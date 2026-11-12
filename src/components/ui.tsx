@@ -15,7 +15,7 @@ export function Brand({ light = false }: { light?: boolean }) {
 const statusTones: Record<string,string> = {
   Paid:"green", Active:"green", Completed:"green", "In stock":"green", Retail:"slate", Business:"blue",
   Agent:"teal", Partial:"teal", Unpaid:"navy", Returned:"slate", "Low stock":"teal", "Out of stock":"navy",
-  "In progress":"blue", Scheduled:"teal", Cancelled:"slate", Converted:"green", Open:"blue", Expired:"slate",
+  "In progress":"blue", Scheduled:"teal", Requested:"blue", Pending:"navy", Approved:"teal", Rejected:"slate", Cancelled:"slate", Converted:"green", Open:"blue", Expired:"slate",
   Archived:"slate", Inactive:"slate", Sold:"blue", Restocked:"green", Installed:"teal", "Non-stock":"teal", Service:"blue", Stocked:"green"
 }
 export function Badge({ value }: { value: string }) {

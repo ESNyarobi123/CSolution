@@ -66,8 +66,8 @@ BEGIN
     sale_total := item.price*row_data.qty + row_data.service*80000;
     sale_cost := item.cost*row_data.qty + row_data.service*25000;
     sale_time := (now() - make_interval(days => row_data.days_back, mins => row_data.qty * 2));
-    INSERT INTO sales (id,request_id,invoice,customer_id,customer_name,customer_address,customer_phone,cashier_id,kind,subtotal,total,cost,due_date,created_at)
-      VALUES (sale_id,gen_random_uuid(),invoice_ref,person.id,person.name,person.address,person.phone,admin,
+    INSERT INTO sales (id,request_id,invoice,customer_id,customer_name,customer_address,customer_phone,buyer_type,cashier_id,kind,subtotal,total,cost,due_date,created_at)
+      VALUES (sale_id,gen_random_uuid(),invoice_ref,person.id,person.name,person.address,person.phone,CASE WHEN person.kind='Agent' THEN 'Agent' ELSE 'Customer' END,admin,
         CASE WHEN row_data.service=1 THEN 'Equipment + installation' ELSE 'Equipment' END,
         sale_total,sale_total,sale_cost,(sale_time AT TIME ZONE 'Africa/Dar_es_Salaam')::date+14,sale_time)
       RETURNING number INTO sale_ref;

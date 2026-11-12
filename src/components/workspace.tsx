@@ -1,18 +1,20 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
-import { Archive, ArchiveRestore, ArrowRight, BadgeCheck, Bell, Box, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronRight, CircleDollarSign, CreditCard, FileText, LayoutDashboard, Layers3, LogOut, Menu, PackageOpen, Plus, RadioTower, ReceiptText, Search, Settings2, Store, Trash2, Truck, UserCheck, UserPlus, Users, UserX, X, type LucideIcon } from "lucide-react"
-import { can, type Capability } from "@/lib/access"
+import { useEffect, useEffectEvent, useRef, useState } from "react"
+import { Archive, ArchiveRestore, ArrowRight, BadgeCheck, Bell, Box, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronRight, CircleDollarSign, ClipboardCheck, CreditCard, FileText, LayoutDashboard, Layers3, LogOut, Menu, PackageOpen, Plus, RadioTower, ReceiptText, RefreshCw, Search, Settings2, Store, Trash2, Truck, UserCheck, UserPlus, Users, UserX, Wallet, X, type LucideIcon } from "lucide-react"
+import { can, ownSalesOnly, type Capability, type Role } from "@/lib/access"
 import { deletableRecords } from "@/lib/management"
 import { date, initials, money, num, RequestError, requestJSON } from "@/lib/format"
 import type { JobDetail, SaleDetail, Snapshot } from "@/lib/model"
-import { Dashboard } from "./dashboard"
+import { Dashboard, reportStart } from "./dashboard"
 import { QuoteDocument, SaleDocument } from "./documents"
-import { CartForm, ContactForm, ExpenseForm, GroupForm, JobForm, JobStatusForm, MaterialForm, PaymentForm, ProductForm, PurchaseForm, PurchaseReferenceForm, ReturnForm, SettingsForm, StaffForm, StockForm, type Save } from "./forms"
-import { Analytics, CustomerDetail, Customers, Documents, Groups, Installations, Inventory, ProductDetail, Products, Sales, Settings, Suppliers, type Panel } from "./screens"
+import { CartForm, ContactForm, ExpenseForm, GroupForm, InstallationRequestForm, JobForm, JobStatusForm, MaterialForm, PaymentForm, ProductForm, PurchaseForm, PurchaseReferenceForm, ReturnForm, SettingsForm, StaffForm, StockForm, type Save } from "./forms"
+import { ApprovalDetail, Approvals, FrontOfficeDashboard } from "./front-office"
+import { Analytics, CustomerDetail, Customers, Documents, Expenses, Groups, Installations, Inventory, ProductDetail, Products, Sales, Settings, Suppliers, type Panel } from "./screens"
 import { ActionMenu, Badge, Brand, Empty, ErrorLine, Form, Modal, SearchBox, Select, Table } from "./ui"
 
-const sections: { name: string; links: { id:string; title:string; heading:string; sub:string; icon:LucideIcon; permission?:Capability }[] }[] = [
+type NavigationGroup = { name: string; links: { id:string; title:string; heading:string; sub:string; icon:LucideIcon; permission?:Capability }[] }
+const sections: NavigationGroup[] = [
   { name:"WORKSPACE", links:[
     { id:"overview",title:"Overview",heading:"Business overview",sub:"Track sales, stock and service jobs across your shop.", icon:LayoutDashboard },
     { id:"sales",title:"Sales & POS",heading:"Sales & point of sale",sub:"Sell products and services, and track every payment.", icon:CreditCard, permission:"sales" },
@@ -27,13 +29,36 @@ const sections: { name: string; links: { id:string; title:string; heading:string
     { id:"suppliers",title:"Suppliers & purchases",heading:"Suppliers & purchases",sub:"Manage suppliers and receive stock into the shop.",icon:Truck,permission:"inventory" }
   ]},
   { name:"OPERATIONS", links:[
-    { id:"installations",title:"Installations",heading:"Installations",sub:"Assign technicians and track materials and service work.",icon:RadioTower,permission:"jobs" },
+    { id:"installations",title:"Installations",heading:"Installations",sub:"Assign technicians and track materials and service work.",icon:RadioTower,permission:"viewJobs" },
+    { id:"approvals",title:"Approvals",heading:"Approvals",sub:"Review requests for discounts, credit and returns.",icon:ClipboardCheck,permission:"viewApprovals" },
+    { id:"expenses",title:"Expenses",heading:"Expenses",sub:"Record operating costs and expenses linked to installation jobs.",icon:CircleDollarSign,permission:"reports" },
     { id:"analytics",title:"Analytics & reports",heading:"Analytics & reports",sub:"Measure revenue, costs and profitability across the shop.",icon:ChartNoAxesCombined,permission:"reports" },
     { id:"settings",title:"Settings",heading:"Settings",sub:"Manage the business profile, staff accounts and backups.",icon:Settings2,permission:"admin" }
   ]}
 ]
 
-const createEntries: { label:string; kind:"sale"|"quote"|"product"|"openingStock"|"categories"|"brands"|"customer"|"supplier"|"job"|"expense"|"staff"; icon:LucideIcon; permission:Capability }[] = [
+const frontOfficeSections: NavigationGroup[] = [
+  { name:"FRONT OFFICE",links:[
+    { id:"overview",title:"Overview",heading:"Front Office",sub:"Manage your sales, customers and service requests.",icon:LayoutDashboard },
+    { id:"sales",title:"My sales & POS",heading:"My sales & POS",sub:"Create a sale and view your transaction history.",icon:CreditCard },
+    { id:"products",title:"Products & stock",heading:"Products & stock",sub:"Check selling prices, product details and available stock.",icon:Box },
+    { id:"customers",title:"Customers & agents",heading:"Customers & agents",sub:"Add customers and agents and view your sales with them.",icon:Users },
+    { id:"documents",title:"Quotations & invoices",heading:"My quotations & invoices",sub:"Create quotations and access invoices and receipts from your sales.",icon:ReceiptText },
+    { id:"payments",title:"Payments",heading:"Payments",sub:"Follow up on open balances and record payments on your invoices.",icon:Wallet }
+  ]},
+  { name:"REQUESTS",links:[
+    { id:"installations",title:"Installation requests",heading:"Installation requests",sub:"Send service requests and check their status.",icon:RadioTower },
+    { id:"approvals",title:"Approvals",heading:"My approvals",sub:"Follow up on requests for discounts, credit and returns.",icon:ClipboardCheck }
+  ]}
+]
+
+function navigationFor(role: Role) {
+  return ownSalesOnly(role) ? frontOfficeSections : sections.map(group=>({
+    ...group,links:group.links.filter(link=>!link.permission || can(role,link.permission))
+  }))
+}
+
+const createEntries: { label:string; kind:"sale"|"quote"|"product"|"openingStock"|"categories"|"brands"|"customer"|"supplier"|"job"|"installationRequest"|"expense"|"staff"; icon:LucideIcon; permission:Capability }[] = [
   { label:"New sale",kind:"sale",icon:CreditCard,permission:"sales" },
   { label:"New quotation",kind:"quote",icon:FileText,permission:"sales" },
   { label:"Add product",kind:"product",icon:Box,permission:"catalog" },
@@ -42,7 +67,8 @@ const createEntries: { label:string; kind:"sale"|"quote"|"product"|"openingStock
   { label:"Add brand",kind:"brands",icon:BadgeCheck,permission:"catalog" },
   { label:"Add customer",kind:"customer",icon:Users,permission:"customers" },
   { label:"Add supplier",kind:"supplier",icon:Truck,permission:"inventory" },
-  { label:"New installation",kind:"job",icon:RadioTower,permission:"jobs" },
+  { label:"New installation",kind:"job",icon:RadioTower,permission:"scheduleJobs" },
+  { label:"Installation request",kind:"installationRequest",icon:RadioTower,permission:"requestJobs" },
   { label:"Record expense",kind:"expense",icon:CircleDollarSign,permission:"reports" },
   { label:"Add staff",kind:"staff",icon:UserPlus,permission:"admin" }
 ]
@@ -57,15 +83,35 @@ export function Workspace({ initial }: { initial: Snapshot }) {
   const [error,setError] = useState("")
   const [updating,setUpdating] = useState(false)
   const generation = useRef(0)
+  const autoPending = useRef(false)
   const windowNotice = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const available = sections.map(group=>({...group,links:group.links.filter(link=>!link.permission||can(data.user.role,link.permission))}))
-  const active = available.flatMap(group=>group.links).find(link=>link.id===page.split("/")[0]) ?? sections[0].links[0]
+  const available = navigationFor(data.user.role)
+  const active = available.flatMap(group=>group.links).find(link=>link.id===page.split("/")[0]) ?? available[0].links[0]
+  const activePage = active.id
+  const reportPage = activePage==="overview" || activePage==="analytics" || activePage==="approvals"
+  const frontOffice = ownSalesOnly(data.user.role)
   const sells = can(data.user.role,"sales")
   const canSeeInventory = can(data.user.role,"inventory")
   const createActions = createEntries
-    .filter(entry=>can(data.user.role,entry.permission) && !(entry.kind==="job" && data.user.role==="Technician"))
+    .filter(entry=>can(data.user.role,entry.permission))
     .map(({label,kind,icon})=>({label,icon,run:()=>open({kind})}))
   const stockAlerts = data.products.filter(p=>p.active&&p.type==="Stocked"&&p.on_hand<=p.reorder).length
+  const approvalAlerts = data.approvals.filter(item=>item.status===(frontOffice ? "Approved" : "Pending")).length
+  const autoRefresh = useEffectEvent(()=>{
+    if (document.visibilityState!=="visible" || panel || updating || autoPending.current) return
+    autoPending.current = true
+    void refresh().catch(()=>undefined).finally(()=>{ autoPending.current = false })
+  })
+
+  useEffect(()=>{
+    if (!reportPage || panel) return
+    const interval = window.setInterval(autoRefresh,60_000)
+    document.addEventListener("visibilitychange",autoRefresh)
+    return ()=>{
+      window.clearInterval(interval)
+      document.removeEventListener("visibilitychange",autoRefresh)
+    }
+  },[reportPage,panel,data.updatedAt])
 
   useEffect(()=>{
     const read = ()=>{ setPage(location.hash.slice(1) || "overview"); setMobile(false) }
@@ -94,7 +140,7 @@ export function Workspace({ initial }: { initial: Snapshot }) {
   }
   async function refresh(days = data.days) {
     const run = ++generation.current
-    const next = await requestJSON<Snapshot>("/api/shop?days="+days)
+    const next = await requestJSON<Snapshot>("/api/shop?days="+days,{cache:"no-store"})
     if (generation.current===run) setData(next)
     return next
   }
@@ -112,18 +158,25 @@ export function Workspace({ initial }: { initial: Snapshot }) {
     } catch (e) { setError(e instanceof Error ? e.message : "Could not sign out.") }
   }
   const save: Save = async (body,message="Changes saved")=>{
+    const {action} = body as { action?: string }
     let result: { id?:string; number?:string; refund?:number }
     try {
       result = await requestJSON("/api/shop",{
         method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)
       })
     } catch (error) {
-      if (panel?.kind==="sale" && error instanceof RequestError && error.status===409) await refresh().catch(()=>undefined)
+      if ((panel?.kind==="sale" || panel?.kind==="quote") && error instanceof RequestError && error.status===409) await refresh().catch(()=>undefined)
       throw error
     }
     const refreshResult = await refresh().catch(e=>{ setError(e instanceof Error ? e.message : "Refresh the page to see the saved change.");return undefined })
+    if (action==="requestSaleApproval" || action==="requestReturnApproval") go("approvals")
+    if (panel?.kind==="quote" && page.split("/")[0]==="documents" && refreshResult?.quotes.some(quote=>quote.id===result.id)) {
+      setPage("documents/quotations")
+      history.replaceState(null,"","#documents/quotations")
+    }
     setPanel(current=>{
       if (!current || current!==panel) return current
+      if (action==="completeApprovedSale" && result.id) return {kind:"saleDetail",id:result.id}
       if (current.kind==="sale" && result.id) return {kind:"saleDetail",id:result.id}
       if (current.kind==="quote") {
         const quote = refreshResult?.quotes.find(q=>q.id===result.id)
@@ -140,16 +193,18 @@ export function Workspace({ initial }: { initial: Snapshot }) {
   const screenProps = { data,open }
   const close = ()=>setPanel(null)
   const formProps = { data,close,save }
-  const activePage = active.id
   const screens = {
-    overview:<Dashboard data={data} go={go} openSale={id=>open({kind:"saleDetail",id})} openJob={id=>open({kind:"jobDetail",id})} />,
+    overview:frontOffice ? <FrontOfficeDashboard {...screenProps} go={go} /> :
+      <Dashboard data={data} go={go} openSale={id=>open({kind:"saleDetail",id})} openQuote={record=>open({kind:"quoteDetail",record})} openJob={id=>open({kind:"jobDetail",id})} />,
     products:<Products {...screenProps} />, categories:<Groups {...screenProps} kind="categories" />, brands:<Groups {...screenProps} kind="brands" />,
-    inventory:<Inventory {...screenProps} initialLow={page==="inventory/low-stock"} />, sales:<Sales {...screenProps} />, documents:<Documents {...screenProps} />,
+    inventory:<Inventory {...screenProps} initialLow={page==="inventory/low-stock"} />, sales:<Sales {...screenProps} />, documents:<Documents {...screenProps} page={page} go={go} />,
     customers:<Customers {...screenProps} />, installations:<Installations {...screenProps} />, suppliers:<Suppliers {...screenProps} />,
-    analytics:<Analytics {...screenProps} />, settings:<Settings {...screenProps} />
+    payments:<Sales {...screenProps} balancesOnly />, approvals:<Approvals {...screenProps} />,
+    analytics:<Analytics {...screenProps} />, expenses:<Expenses {...screenProps} />, settings:<Settings {...screenProps} initialStaff={page==="settings/staff"} />
   }
-  const showPeriod = sells&&(activePage==="overview"||activePage==="analytics"||(activePage==="products"&&can(data.user.role,"reports")))
-  const from = new Date(new Date(data.today).getTime() - (data.days-1)*86400000).toISOString()
+  const showPeriod = !frontOffice&&sells&&(activePage==="overview"||activePage==="analytics"||(activePage==="products"&&can(data.user.role,"reports")))
+  const from = reportStart(data.today,data.days)
+  const updatedTime = new Intl.DateTimeFormat("en-GB",{hour:"2-digit",minute:"2-digit",second:"2-digit",timeZone:"Africa/Dar_es_Salaam"}).format(new Date(data.updatedAt))
   return <>
     <div className="app-shell">
       {mobile&&<button className="mobile-shade" aria-label="Close menu" onClick={()=>setMobile(false)} />}
@@ -162,6 +217,7 @@ export function Workspace({ initial }: { initial: Snapshot }) {
             {group.links.map(link=><a href={link.id==="overview" ? "/" : "#"+link.id} key={link.id} className={activePage===link.id ? "active" : ""}
               aria-current={activePage===link.id ? "page" : undefined} onClick={e=>{e.preventDefault();go(link.id)}}>
               <link.icon size={18} strokeWidth={1.75} /><span>{link.title}</span>{link.id==="inventory"&&stockAlerts>0&&<small>{stockAlerts}</small>}
+              {link.id==="approvals"&&approvalAlerts>0&&<small>{approvalAlerts}</small>}
             </a>)}
           </div>)}
         </nav>
@@ -192,15 +248,21 @@ export function Workspace({ initial }: { initial: Snapshot }) {
           <div className="page-heading">
             <div><div className="page-context"><span /> {data.user.demo ? "DEMO WORKSPACE" : "MAIN STORE"}</div>
               <h1>{active.heading}</h1><p>{active.sub}</p></div>
-            {(showPeriod||activePage==="sales")&&<div className="heading-actions">
+            {(reportPage||showPeriod||["sales","documents","expenses"].includes(activePage))&&<div className="heading-actions">
               {showPeriod&&<div className="period-picker" title={date(from)+" – "+date(data.today)}><CalendarDays size={17} />
                 <Select aria-label="Date range" value={data.days} disabled={updating} onChange={e=>void changePeriod(Number(e.target.value))}>
                   <option value={7}>Last 7 days</option><option value={14}>Last 14 days</option><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option>
                 </Select></div>}
-              {(activePage==="overview"||activePage==="sales")&&<button className="button primary" onClick={()=>open({kind:"sale"})}><Plus size={19} /> New sale</button>}
+              {sells&&((activePage==="overview"&&!frontOffice)||activePage==="sales")&&<button className="button primary" onClick={()=>open({kind:"sale"})}><Plus size={19} /> New sale</button>}
+              {activePage==="documents"&&<button className="button primary" onClick={()=>open({kind:"quote"})}><Plus size={19} /> New quotation</button>}
+              {(activePage==="expenses"||activePage==="analytics")&&<button className="button primary" onClick={()=>open({kind:"expense"})}><Plus size={19} /> Record expense</button>}
             </div>}
           </div>
           <ErrorLine message={error} />
+          {reportPage&&<div className="report-refresh">
+            <span><i />Auto refresh · 1 min</span><time dateTime={data.updatedAt}>Updated {updatedTime}</time>
+            <button className="text-button" type="button" disabled={updating} onClick={()=>void changePeriod(data.days)}><RefreshCw size={13} /> {updating ? "Updating…" : "Refresh now"}</button>
+          </div>}
           <div className="page-body" key={page}>{screens[activePage as keyof typeof screens]}</div>
           <footer className="main-footer"><span>CSolution · {data.business.name}</span><span>Dar es Salaam time · TZS</span></footer>
         </main>
@@ -229,16 +291,41 @@ function WorkspaceModal({ panel, close, open, go, formProps }: {
       return product ? modal(product.name,<ProductDetail data={data} product={product} open={open} />,true) :
         modal("Product details",<Empty title="Product could not be found" />)
     }
-    case "customer": return modal(edit("customer"),<ContactForm {...formProps} kind="customer" record={panel.record} />)
+    case "customer": return modal(edit("customer"),<ContactForm {...formProps} kind="customer" record={panel.record} allowAgentCode={can(data.user.role,"manageCustomers")} />)
     case "supplier": return modal(edit("supplier"),<ContactForm {...formProps} kind="supplier" record={panel.record} />)
     case "stock": return modal("Adjust stock",<StockForm {...formProps} product={panel.record} />)
     case "purchase": return modal("Receive purchase",<PurchaseForm {...formProps} />,true)
     case "sale": return <Modal title={panel.record ? "Convert "+panel.record.number : "New sale"} close={close} checkout>
       <CartForm {...formProps} mode="sale" quote={panel.record} />
     </Modal>
-    case "quote": return modal(panel.record ? "Edit "+panel.record.number : "New quotation",<CartForm {...formProps} mode="quote" quote={panel.record} />,true)
+    case "quote": return <Modal title={panel.record ? "Edit "+panel.record.number : "New quotation"} close={close} checkout>
+      <CartForm {...formProps} mode="quote" quote={panel.record} />
+    </Modal>
     case "job": return modal(panel.record?"Edit installation":"New installation",<JobForm {...formProps} record={panel.record} />,true)
+    case "installationRequest": return modal("New installation request",<InstallationRequestForm {...formProps} />,true)
+    case "approvalDetail": {
+      const approval = data.approvals.find(item=>item.id===panel.id)
+      return modal(approval?.kind==="Return" ? "Return approval" : "Sale terms approval",approval ?
+        <ApprovalDetail {...formProps} approval={approval} open={open} /> : <Empty title="Approval request could not be found" />,true)
+    }
     case "expense": return modal(panel.record ? "Edit expense" : "Record expense",<ExpenseForm {...formProps} job={panel.job} record={panel.record} />)
+    case "expenseDetail": {
+      const expense = panel.record
+      return modal(expense.description,<div className="stack">
+        <div className="detail-summary">
+          <div><small>Amount</small><strong>{money(expense.amount)}</strong></div>
+          <div><small>Date</small><strong>{date(expense.incurred)}</strong></div>
+          <div><small>Category</small><strong>{expense.category}</strong></div>
+        </div>
+        <dl className="details-list">
+          <div><dt>Scope</dt><dd>{expense.job ?? "Operating expense"}</dd></div>
+          <div><dt>Payment method</dt><dd>{expense.method ?? "—"}</dd></div>
+          <div><dt>Reference</dt><dd>{expense.reference || "—"}</dd></div>
+          {expense.notes && <div><dt>Notes</dt><dd className="expense-note">{expense.notes}</dd></div>}
+        </dl>
+        {can(data.user.role,"admin") && <div className="detail-actions"><button className="button secondary" onClick={()=>open({kind:"expense",record:expense})}>Edit expense</button></div>}
+      </div>)
+    }
     case "purchaseReference": return modal("Edit purchase reference",<PurchaseReferenceForm {...formProps} record={panel.record} />,false,panel.record.number)
     case "deleteRecord": {
       const label = "Delete "+deletableRecords[panel.record]
@@ -279,13 +366,13 @@ function WorkspaceModal({ panel, close, open, go, formProps }: {
     case "invoice":
     case "receipt":
     case "payment":
-    case "return": return modal(({saleDetail:"Sale details",invoice:"Invoice",receipt:"Receipt",payment:"Record payment",return:"Record return"})[panel.kind],
+    case "return": return modal(({saleDetail:"Sale details",invoice:"Invoice",receipt:"Receipt",payment:"Record payment",return:can(data.user.role,"requestApprovals") ? "Request return" : "Record return"})[panel.kind],
       <LoadDetail<SaleDetail> type="sale" id={panel.id}>{detail=>{
         switch(panel.kind) {
           case "invoice":
           case "receipt": return <SaleDocument detail={detail} business={data.business} kind={panel.kind} />
           case "payment": return <PaymentForm {...formProps} close={()=>open({kind:"saleDetail",id:panel.id})} sale={detail.sale} />
-          case "return": return <ReturnForm {...formProps} close={()=>open({kind:"saleDetail",id:panel.id})} detail={detail} />
+          case "return": return <ReturnForm {...formProps} close={()=>open({kind:"saleDetail",id:panel.id})} detail={detail} approval={can(data.user.role,"requestApprovals")} />
           default: return <SaleView detail={detail} data={data} open={open} />
         }
       }}</LoadDetail>,panel.kind!=="payment"&&panel.kind!=="return")
@@ -328,7 +415,7 @@ function SaleView({ detail,data,open }: { detail:SaleDetail;data:Snapshot;open:(
   const s=detail.sale
   const grossProfit = s.net_cost === undefined ? null : s.net_revenue - s.net_cost
   return <div className="stack">
-    <div className="record-title"><div><h3>{s.number} · {s.customer_name}</h3><p>{s.kind} · {date(s.created_at)} · {s.cashier}</p></div><Badge value={s.status} /></div>
+    <div className="record-title"><div><h3>{s.number} · {s.customer_name}</h3><p>{s.buyer_type} · {s.kind} · {date(s.created_at)} · {s.cashier}</p></div><Badge value={s.status} /></div>
     <div className="detail-summary">
       <div><small>Sale total</small><strong>{money(s.total)}</strong></div><div><small>Paid</small><strong>{money(s.paid)}</strong></div>
       <div><small>Balance due</small><strong>{money(s.balance)}</strong></div>
@@ -343,8 +430,8 @@ function SaleView({ detail,data,open }: { detail:SaleDetail;data:Snapshot;open:(
       <button className="button secondary small" onClick={()=>open({kind:"invoice",id:s.id})}><FileText size={16} /> View invoice</button>
       {s.paid>0&&<button className="button secondary small" onClick={()=>open({kind:"receipt",id:s.id})}><ReceiptText size={16} /> View receipt</button>}
       {s.balance>0&&<button className="button primary small" onClick={()=>open({kind:"payment",id:s.id})}><Plus size={16} /> Record payment</button>}
-      {can(data.user.role,"pricing")&&detail.lines.some(line=>line.returned<line.quantity)&&
-        <button className="button secondary small" onClick={()=>open({kind:"return",id:s.id})}>Record return</button>}
+      {(can(data.user.role,"pricing")||can(data.user.role,"requestApprovals"))&&detail.lines.some(line=>line.returned<line.quantity)&&
+        <button className="button secondary small" onClick={()=>open({kind:"return",id:s.id})}>{can(data.user.role,"requestApprovals") ? "Request return" : "Record return"}</button>}
     </div>
     <div className="detail-block"><h3>Items</h3><Table rows={detail.lines} columns={[
       {label:"Item",cell:l=><><strong>{l.name}</strong><small className="table-sub">{l.serial ? "S/N "+l.serial : l.sku}{l.returned>0 ? " · "+l.returned+" returned" : ""}</small>{l.warranty_until && <small className="table-sub">Warranty until {date(l.warranty_until)}</small>}</>},
@@ -363,20 +450,23 @@ function SaleView({ detail,data,open }: { detail:SaleDetail;data:Snapshot;open:(
 }
 function JobView({ detail,data,open }: { detail:JobDetail;data:Snapshot;open:(panel:Panel)=>void }) {
   const j=detail.job
-  const manager = data.user.role!=="Technician"
+  const manager = can(data.user.role,"scheduleJobs")
+  const handlesJobs = can(data.user.role,"jobs")
+  const canOpenSale = data.sales.some(sale=>sale.id===j.sale_id)
   return <div className="stack">
     <div className="record-title"><div><h3>{j.title}</h3><p>{j.number} · {j.customer ?? "Walk-in customer"}</p></div><Badge value={j.status} /></div>
     <div className="detail-summary">
       <div><small>Technician</small><strong>{j.technician??"Unassigned"}</strong></div>
-      <div><small>Scheduled</small><strong>{date(j.scheduled)}</strong></div>
+      <div><small>{j.status==="Requested" ? "Preferred date" : "Scheduled"}</small><strong>{date(j.scheduled)}</strong></div>
       <div><small>Location</small><strong>{j.location||"—"}</strong></div>
-      {j.sale && <div><small>Linked sale</small>{manager && j.sale_id ?
+      {j.sale && <div><small>Linked sale</small>{canOpenSale && j.sale_id ?
         <button className="text-button" onClick={()=>open({kind:"saleDetail",id:j.sale_id!})}>{j.sale}</button> : <strong>{j.sale}</strong>}</div>}
     </div>
     {j.notes&&<p className="detail-note">{j.notes}</p>}
     <div className="detail-actions">
-      <button className="button secondary small" onClick={()=>open(manager?{kind:"job",record:j}:{kind:"jobStatus",id:j.id})}>{manager?"Edit job":"Update status"}</button>
-      {j.status!=="Completed"&&j.status!=="Cancelled"&&<button className="button primary small" onClick={()=>open({kind:"material",id:j.id})}><Plus size={16} /> Add material</button>}
+      {handlesJobs && <button className="button secondary small" onClick={()=>open(manager?{kind:"job",record:j}:{kind:"jobStatus",id:j.id})}>
+        {manager ? j.status==="Requested" ? "Schedule installation" : "Edit job" : "Update status"}</button>}
+      {handlesJobs && j.status!=="Requested"&&j.status!=="Completed"&&j.status!=="Cancelled"&&<button className="button primary small" onClick={()=>open({kind:"material",id:j.id})}><Plus size={16} /> Add material</button>}
       {can(data.user.role,"reports")&&<button className="button secondary small" onClick={()=>open({kind:"expense",job:j})}><Plus size={16} /> Record expense</button>}
     </div>
     <div className="detail-block"><h3>Materials & equipment</h3><Table rows={detail.materials} empty="No materials recorded" columns={[
@@ -390,7 +480,7 @@ function JobView({ detail,data,open }: { detail:JobDetail;data:Snapshot;open:(pa
 }
 function SearchWorkspace({ data,go,open }: { data:Snapshot;go:(section:string)=>void;open:(panel:Panel)=>void }) {
   const [query,setQuery] = useState("")
-  const links = sections.flatMap(g=>g.links).filter(link=>!link.permission||can(data.user.role,link.permission))
+  const links = navigationFor(data.user.role).flatMap(group=>group.links)
   const text = query.trim().toLowerCase()
   const matches = [
     ...links.map(l=>({ id:l.id,title:l.title,sub:"Page",Icon:l.icon,run:()=>go(l.id) })),

@@ -6,13 +6,14 @@ import { money, num } from "@/lib/format"
 import type { Product } from "@/lib/model"
 import { Empty, ProductPhoto, Select } from "./ui"
 
-export function SaleCatalog({ products, quantities, price, add, lineCount, viewCart }: {
+export function SaleCatalog({ products, quantities, price, add, lineCount, viewCart, trackStock = true }: {
   products: Product[]
   quantities: Map<string,number>
   price: (product: Product) => number
   add: (product: Product) => void
   lineCount: number
   viewCart: () => void
+  trackStock?: boolean
 }) {
   const [query,setQuery] = useState("")
   const [category,setCategory] = useState("")
@@ -27,8 +28,8 @@ export function SaleCatalog({ products, quantities, price, add, lineCount, viewC
     const words = [product.name,product.sku,product.category,product.brand].join(" ").toLowerCase()
     return search.every(term=>words.includes(term))
   })
-  const available = (product: Product) => Math.max(0,product.on_hand-(quantities.get(product.id) ?? 0))
-  const canAdd = (product: Product) => product.type!=="Stocked" || available(product)>0
+  const available = (product: Product) => Math.max(0,product.on_hand-(trackStock ? quantities.get(product.id) ?? 0 : 0))
+  const canAdd = (product: Product) => !trackStock || product.type!=="Stocked" || available(product)>0
   const sorted = [...matches].sort((a,b)=>(a[groupBy] ?? "").localeCompare(b[groupBy] ?? "") || a.name.localeCompare(b.name))
   const groups = new Map<string,Product[]>()
   for (const product of sorted.slice(0,limit)) {
@@ -42,7 +43,7 @@ export function SaleCatalog({ products, quantities, price, add, lineCount, viewC
     <div className="checkout-section-title">
       <span className="metric-icon blue"><Layers3 size={19} /></span>
       <div><h3>Product catalog</h3><small>{num(matches.length)} {matches.length===1 ? "match" : "matches"}</small></div>
-      <button type="button" className="button secondary small sale-cart-jump" onClick={viewCart}><ShoppingCart size={16} /> Cart ({lineCount})</button>
+      <button type="button" className="button secondary small sale-cart-jump" onClick={viewCart}><ShoppingCart size={16} /> {trackStock ? "Cart" : "Items"} ({lineCount})</button>
     </div>
     <label className="search-box sale-product-search"><Search size={17} />
       <input type="search" data-checkout-focus aria-label="Search products" placeholder="Search name, SKU, category or brand" value={query}

@@ -50,7 +50,36 @@ Sheria za ulinzi wa historia:
 - Staff anaweza kuzimwa na kuwashwa tena; mtu hawezi kujizima mwenyewe.
 - Rekodi zinazoshirikiwa na mauzo au stock zinapewa ujumbe unaoeleza hatua sahihi badala ya kosa la kiufundi.
 
-## Muundo wa project
+## Roles na ruhusa
+
+Mfumo una role mbili kuu. Admin anasimamia biashara yote; Front Office anahudumia duka. Ruhusa zote zipo kwenye `src/lib/access.ts` na zinatekelezwa **kwenye API**, si kwa kuficha vitufe pekee.
+
+| Uwezo | Admin | Front Office |
+| --- | --- | --- |
+| Kuona bidhaa, bei ya kuuza na stock | ✅ | ✅ |
+| Kuona gharama ya kununua, thamani ya stock na faida | ✅ | ❌ |
+| Kuongeza/kuhariri bidhaa, categories na brands | ✅ | ❌ |
+| Kupokea stock, suppliers na purchases | ✅ | ❌ |
+| Kuuza, kutoa invoice na receipt | ✅ | ✅ (mauzo yake) |
+| Quotations | ✅ | ✅ (bila kuhariri au kufuta) |
+| Kuongeza wateja na agents | ✅ | ✅ |
+| Kurekodi malipo | ✅ | ✅ |
+| Kutoa discount au kuuza kwa mkopo | ✅ moja kwa moja | Kwa idhini ya Admin |
+| Returns na refunds | ✅ moja kwa moja | Kwa idhini ya Admin |
+| Installation requests | ✅ | ✅ |
+| Kupanga technician na kusimamia job | ✅ | ❌ |
+| Analytics, faida, expenses na reports | ✅ | ❌ |
+| Staff, settings, audit log na backup | ✅ | ❌ |
+
+Mchanganyiko kamili unaonekana kwenye **Settings → Staff & roles → Permission matrix**.
+
+### Mfumo wa idhini (approvals)
+
+Front Office hawezi kutoa discount, kuuza kwa mkopo au kufanya return moja kwa moja. Anawasilisha ombi lenye sababu; Admin anaidhinisha au anakataa kwenye **Approvals**. Sale au return haitekelezwi mpaka idhini itolewe, na bei au kiasi kikibadilika ombi la awali linakataliwa.
+
+Kila ombi na uamuzi vinaingia kwenye **Activity log**. Muundo wa ruhusa kwa kila role upo kwenye `access.ts`; mwongozo wa `Front Office` unaonekana kwenye **Settings**.
+
+
 
 - `src/app` ina Next.js App Router na API. `src/components` ina dashboard, fomu na nyaraka.
 - `db` ina PostgreSQL migrations na data ya demo. `src/lib` ina ruhusa, queries, validation na transactions.
@@ -91,7 +120,7 @@ docker compose logs -f app
 `migrate` inaunda **Admin** mmoja kutoka `CSOLUTION_ADMIN_EMAIL` na `CSOLUTION_ADMIN_PASSWORD`. Kwa watumiaji wengine wa mwanzo (cashier, storekeeper, technician), weka kwenye `.env`:
 
 ```sh
-CSOLUTION_TEAM=cash@shop.com:Cashier,store@shop.com:Storekeeper
+CSOLUTION_TEAM=front@shop.com:Front Office,store@shop.com:Storekeeper
 CSOLUTION_TEAM_PASSWORD=<nywila-ndefu>
 ```
 
@@ -101,7 +130,9 @@ Kisha:
 docker compose --profile tools run --rm migrate node scripts/create-staff.mjs
 ```
 
-Muundo ni `email:Role[:Jina]`. Jina likikosekana, linatengenezwa kutoka sehemu ya mbele ya email. Role lazima iwe moja ya `Admin`, `Manager`, `Cashier`, `Storekeeper`, `Technician`. Script ni idempotent: ikiendeshwa tena inabadilisha nywila ya akaunti hizo na kuzifanya active tena.
+Muundo ni `email:Role[:Jina]`. Jina likikosekana, linatengenezwa kutoka sehemu ya mbele ya email. Role lazima iwe moja ya `Admin`, `Front Office`, `Manager`, `Cashier`, `Storekeeper`, `Technician`. Script ni idempotent: ikiendeshwa tena inabadilisha nywila ya akaunti hizo na kuzifanya active tena.
+
+- Role ya `Front Office` inatumia interface fupi ya duka. Baada ya kubadilisha role ya mtu, akaunti yake inatolewa kwenye sessions zote na lazima aingie tena.
 
 - `migrate` ni one-shot; haiendeshwi na `up`. Endesha tena kila unapoongeza migration mpya kwenye `db/`.
 - Database tupu haina data ya demo. `CSOLUTION_DEMO=0` inahakikisha data ya majaribio haipandishwi; `1` inaweka demo mara moja tu kwenye database tupu.

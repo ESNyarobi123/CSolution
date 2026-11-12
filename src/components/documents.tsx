@@ -1,7 +1,7 @@
 "use client"
 
-import { useState } from "react"
-import { Download, Printer } from "lucide-react"
+import { useEffect, useState } from "react"
+import { Download, Printer, Share2 } from "lucide-react"
 import type { Business, Quote, SaleDetail } from "@/lib/model"
 import { date, money, num } from "@/lib/format"
 import { ErrorLine } from "./ui"
@@ -12,7 +12,7 @@ type Doc = {
   paymentList?: { method: string; amount: number; reference: string; created_at: string }[]
 }
 
-async function downloadDocument(doc: Doc, business: Business) {
+async function createDocumentPdf(doc: Doc, business: Business) {
   const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib")
   const pdf = await PDFDocument.create()
   pdf.setTitle(doc.title + " " + doc.number)
@@ -112,11 +112,14 @@ async function downloadDocument(doc: Doc, business: Business) {
     write("CSolution · " + doc.number,42,29,{color:muted,size:9})
     write((i+1)+" / "+pages.length,553,29,{right:true,color:muted,size:9})
   }
-  const blob = new Blob([new Uint8Array(await pdf.save())],{type:"application/pdf"})
-  const url = URL.createObjectURL(blob)
+  return new File([new Uint8Array(await pdf.save())],doc.number+".pdf",{type:"application/pdf"})
+}
+
+function downloadDocument(file: File) {
+  const url = URL.createObjectURL(file)
   const link = document.createElement("a")
   link.href=url
-  link.download=doc.number+".pdf"
+  link.download=file.name
   link.click()
   setTimeout(()=>URL.revokeObjectURL(url),1500)
 }
@@ -147,15 +150,27 @@ export function QuoteDocument({ quote, business }: { quote: Quote; business: Bus
 function DocumentView({ doc, business }: { doc: Doc; business: Business }) {
   const [busy,setBusy] = useState(false)
   const [error,setError] = useState("")
-  async function download() {
+  const [canShare,setCanShare] = useState(false)
+  useEffect(()=>{
+    setCanShare(navigator.canShare?.({files:[new File([""],"document.pdf",{type:"application/pdf"})]}) ?? false)
+  },[])
+  async function exportPdf(share = false) {
     setBusy(true); setError("")
-    try { await downloadDocument(doc,business) }
-    catch { setError("PDF download failed. Try printing this document.") }
+    try {
+      const file = await createDocumentPdf(doc,business)
+      if (share) await navigator.share({files:[file],title:doc.title+" "+doc.number})
+      else downloadDocument(file)
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name==="AbortError")) {
+        setError(share ? "Could not open sharing. Download the PDF to attach it in WhatsApp." : "PDF download failed. Try printing this document.")
+      }
+    }
     finally { setBusy(false) }
   }
   return <div className="document-view">
     <div className="document-actions"><button className="button secondary" onClick={()=>window.print()}><Printer size={17} /> Print</button>
-      <button className="button primary" disabled={busy} onClick={()=>void download()}><Download size={17} />{busy ? "Preparing…" : "Download PDF"}</button></div>
+      {canShare && <button className="button secondary" disabled={busy} onClick={()=>void exportPdf(true)}><Share2 size={17} /> Share PDF</button>}
+      <button className="button primary" disabled={busy} onClick={()=>void exportPdf()}><Download size={17} />{busy ? "Preparing…" : "Download PDF"}</button></div>
     <ErrorLine message={error} />
     <section className="print-doc">
       <header className="paper-head"><div><img src="/csolution-logo.jpeg" alt="Connect Solutions logo" /><div><strong>{business.name}</strong><small>{business.address}</small><small>{[business.phone,business.email].filter(Boolean).join(" · ")}</small></div></div>

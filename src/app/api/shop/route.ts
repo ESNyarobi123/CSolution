@@ -14,7 +14,7 @@ export async function GET(request: Request) {
   if (detail) {
     const id = z.uuid().safeParse(search.get("id"))
     if (!id.success) return Response.json({ error: "Invalid record." }, { status: 400 })
-    const permission = detail === "sale" ? "sales" : detail === "job" ? "jobs" : undefined
+    const permission = detail === "sale" ? "sales" : detail === "job" ? "viewJobs" : undefined
     if (!permission || !can(user.role,permission)) return Response.json({ error: "Access denied." }, { status: 403 })
     const data = detail === "sale" ? await getSale(id.data,user) : await getJob(id.data,user)
     return data ? Response.json(data) : Response.json({ error: "Record could not be found." }, { status: 404 })
