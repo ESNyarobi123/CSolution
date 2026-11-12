@@ -86,8 +86,25 @@ docker compose ps
 docker compose logs -f app
 ```
 
+### Akaunti za mwanzo
+
+`migrate` inaunda **Admin** mmoja kutoka `CSOLUTION_ADMIN_EMAIL` na `CSOLUTION_ADMIN_PASSWORD`. Kwa watumiaji wengine wa mwanzo (cashier, storekeeper, technician), weka kwenye `.env`:
+
+```sh
+CSOLUTION_TEAM=cash@shop.com:Cashier,store@shop.com:Storekeeper
+CSOLUTION_TEAM_PASSWORD=<nywila-ndefu>
+```
+
+Kisha:
+
+```sh
+docker compose --profile tools run --rm migrate node scripts/create-staff.mjs
+```
+
+Muundo ni `email:Role[:Jina]`. Jina likikosekana, linatengenezwa kutoka sehemu ya mbele ya email. Role lazima iwe moja ya `Admin`, `Manager`, `Cashier`, `Storekeeper`, `Technician`. Script ni idempotent: ikiendeshwa tena inabadilisha nywila ya akaunti hizo na kuzifanya active tena.
+
 - `migrate` ni one-shot; haiendeshwi na `up`. Endesha tena kila unapoongeza migration mpya kwenye `db/`.
-- Kuweka data ya demo kwenye database tupu: endesha `migrate` ukiwa na `CSOLUTION_DEMO=1`, kisha rudi kwenye `0` kwa app.
+- Database tupu haina data ya demo. `CSOLUTION_DEMO=0` inahakikisha data ya majaribio haipandishwi; `1` inaweka demo mara moja tu kwenye database tupu.
 - Backup: `docker compose exec -T db pg_dump -U csolution -d csolution_shop -Fc > csolution.dump`.
 - Kuanza upya na duka tupu: `docker compose down -v` kisha `migrate` na `up -d app`.
 

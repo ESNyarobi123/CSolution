@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start --hostname 127.0.0.1 --port 3085",
     "db:setup": "node --env-file-if-exists=.env scripts/setup.mjs",
+    "staff:create": "node --env-file-if-exists=.env scripts/create-staff.mjs",
     "db:local": "bash scripts/local-db.sh",
     "check": "tsc --noEmit"
   },
