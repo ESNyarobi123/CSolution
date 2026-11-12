@@ -236,6 +236,7 @@ async function checkout(db: Client, user: User, input: Checkout) {
   }
   if (input.paid > total) throw new ShopError("Payment cannot exceed the sale total.")
   if (input.paid < total && !customer.id) throw new ShopError("Choose a customer for an unpaid balance.")
+  if (input.installation && !can(user.role, "jobs")) throw new ShopError("Only an administrator or manager can add an installation job to a sale.", 403)
   if (input.installation) await checkTech(db,input.installation.technicianId)
   const serviceOnly = items.every(item => item.product.type === "Service")
   const includesService = items.some(item => item.product.type === "Service") || Boolean(input.installation)

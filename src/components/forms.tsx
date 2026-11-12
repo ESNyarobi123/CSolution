@@ -142,6 +142,7 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
   const isSale = mode === "sale"
   const converting = isSale && Boolean(quote)
   const editPrice = can(data.user.role,"pricing") && !converting
+  const canAddInstallation = can(data.user.role,"jobs")
   const buyer = data.customers.find(c=>c.id===customerId)
   const lookupPrice = (product?: Product) => product ? (buyer?.kind==="Agent" ? product.agent_price ?? product.price : product.price) : 0
   const priceForLine = (line: Line) => line.price ?? lookupPrice(productMap.get(line.productId))
@@ -196,7 +197,7 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
     await save({
       action:"sale",...payload,requestId:requestId.current,quoteId:quote?.id,quoteVersion:quote?.version,expectedTotal:total,paid,
       method:v(form,"method") || "Cash",reference:v(form,"reference"),dueDate:opt(form,"dueDate"),
-      installation:installation ? { title:v(form,"title"),location:v(form,"location"),technicianId:opt(form,"technicianId"),scheduled:opt(form,"scheduled") } : undefined
+      installation:canAddInstallation && installation ? { title:v(form,"title"),location:v(form,"location"),technicianId:opt(form,"technicianId"),scheduled:opt(form,"scheduled") } : undefined
     },"Sale completed")
   }
   const customerField = <Field label="Customer or agent">
@@ -315,14 +316,16 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
             {tax>0 && <div><dt>Tax</dt><dd>{money(tax)}</dd></div>}
             {payment!=="full" && <div><dt>Balance due</dt><dd>{money(Math.max(0,total-paid))}</dd></div>}
           </dl>
-          <label className="checkbox checkout-installation"><input type="checkbox" checked={installation}
-            onChange={event=>setInstallation(event.target.checked)} /> Create a linked installation job</label>
-          {installation && <div className="form-grid">
-            <Field label="Job title"><input name="title" required placeholder="Office network installation" /></Field>
-            <Field label="Installation location"><input name="location" /></Field>
-            <Field label="Scheduled date"><input name="scheduled" type="date" /></Field>
-            <Field label="Technician"><Select name="technicianId"><option value="">Assign later</option><PeopleOptions people={data.staff.filter(staff=>staff.role==="Technician"&&staff.active)} /></Select></Field>
-          </div>}
+          {canAddInstallation && <>
+            <label className="checkbox checkout-installation"><input type="checkbox" checked={installation}
+              onChange={event=>setInstallation(event.target.checked)} /> Create a linked installation job</label>
+            {installation && <div className="form-grid">
+              <Field label="Job title"><input name="title" required placeholder="Office network installation" /></Field>
+              <Field label="Installation location"><input name="location" /></Field>
+              <Field label="Scheduled date"><input name="scheduled" type="date" /></Field>
+              <Field label="Technician"><Select name="technicianId"><option value="">Assign later</option><PeopleOptions people={data.staff.filter(staff=>staff.role==="Technician"&&staff.active)} /></Select></Field>
+            </div>}
+          </>}
         </div>
       </section>
     </div>
