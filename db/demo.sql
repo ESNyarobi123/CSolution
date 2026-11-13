@@ -95,4 +95,5 @@ BEGIN
   INSERT INTO installations (title,customer_id,technician_id,location,scheduled,status)
     SELECT 'Router configuration',id,tech,address,current_date,'In progress' FROM customers WHERE name='Musa Technologies';
   INSERT INTO expenses (description,amount,incurred) VALUES ('Local deliveries',35000,current_date);
+  UPDATE products SET installation=true WHERE sku IN ('SVC-INSTALL','SVC-CONFIG');
 END $$;

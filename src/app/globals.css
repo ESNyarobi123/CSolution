@@ -529,6 +529,14 @@ tbody .table-action-cell { background: var(--white); }
 .sale-totals > div { display: flex; justify-content: space-between; gap: 10px; font-size: 11.5px; color: var(--muted); }
 .sale-totals dd { margin: 0; font-weight: 680; color: var(--ink); }
 .checkout-installation { padding-top: 8px; border-top: 1px solid var(--line); }
+.install-type-options { display: grid; gap: 4px; margin: 6px 0 0; padding: 0; border: 0; min-width: 0; }
+.install-type-options legend { margin: 0 0 4px; padding: 0; font-size: 11.5px; font-weight: 650; }
+.install-type-option { display: flex; align-items: center; gap: 8px; padding: 6px 8px; min-height: 38px; border: 1px solid var(--line); border-radius: 7px; font-size: 12px; cursor: pointer; }
+.install-type-option:has(:checked) { border-color: #a9c8fb; background: var(--wash-blue); }
+.install-type-option input { margin: 0; width: 14px; height: 14px; flex: 0 0 auto; accent-color: var(--blue); }
+.install-type-option span { flex: 1; display: grid; gap: 1px; min-width: 0; }
+.install-type-option small { color: var(--muted); font-size: 10.5px; }
+.install-type-option em { font-style: normal; font-weight: 680; white-space: nowrap; }
 .checkout-form .form-end { position: sticky; bottom: 0; z-index: 2; background: var(--white); padding: 9px 16px 10px; border-top: 1px solid var(--line); box-shadow: 0 -4px 13px #102c540b; }
 .checkout-form .form-footer { margin: 0; padding: 0; border: 0; }
 .checkout-footer-summary { flex: 1; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }

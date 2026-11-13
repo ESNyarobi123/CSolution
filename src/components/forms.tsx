@@ -128,6 +128,36 @@ function ProductPicker({ products, add }: { products: Product[]; add: (product: 
   </div>
 }
 
+function InstallationPicker({ types, selected, price, toggle }: {
+  types: Product[]; selected: string[]; price: (product: Product) => number; toggle: (product: Product, on: boolean) => void
+}) {
+  return <fieldset className="install-type-options">
+    <legend>Installation types</legend>
+    {!types.length && <p className="checkout-hint">No installation types yet. Add them under Installations → Types &amp; prices.</p>}
+    {types.map(type=><label className="install-type-option" key={type.id}>
+      <input type="checkbox" checked={selected.includes(type.id)} onChange={event=>toggle(type,event.target.checked)} />
+      <span><strong>{type.name}</strong>{type.description && <small>{type.description}</small>}</span>
+      <em>{money(price(type))}</em>
+    </label>)}
+  </fieldset>
+}
+
+export function InstallationTypeForm({ record, close, save }: SimpleProps & { record?: Product }) {
+  return <Form close={close} label={record ? "Save installation type" : "Add installation type"} onSave={f=>save({
+    action:"installationType",id:record?.id,name:v(f,"name"),price:n(f,"price"),cost:n(f,"cost") || 0,
+    agentPrice:opt(f,"agentPrice") === null ? null : n(f,"agentPrice"),description:v(f,"description"),active:v(f,"active") !== "false"
+  },record ? "Installation type updated" : "Installation type added")}>
+    <div className="form-grid">
+      <Field label="Installation type"><input name="name" defaultValue={record?.name} placeholder="Network installation" required maxLength={160} autoFocus /></Field>
+      <Field label="Price (TZS)"><input name="price" type="number" min="0" max="9999999999" defaultValue={record?.price ?? ""} required /></Field>
+      <Field label="Agent price (TZS)"><input name="agentPrice" type="number" min="0" max="9999999999" defaultValue={record?.agent_price ?? ""} placeholder="Optional" /></Field>
+      <Field label="Labour cost (TZS)" hint="What the work costs the shop. Used for profit on this service."><input name="cost" type="number" min="0" max="9999999999" defaultValue={record?.cost ?? 0} /></Field>
+    </div>
+    <Field label="Description" hint="Shown to the sales team when they choose an installation."><textarea name="description" defaultValue={record?.description} rows={2} /></Field>
+    {record && <Field label="Status"><Select name="active" defaultValue={String(record.active)}><option value="true">Active</option><option value="false">Archived</option></Select></Field>}
+  </Form>
+}
+
 export function CartForm({ data, mode, quote, close, save }: FormProps & { mode: "sale"|"quote"; quote?: Quote }) {
   const productMap = new Map(data.products.map(p=>[p.id,p]))
   const [customerId,setCustomer] = useState(quote?.customer_id ?? "")
@@ -139,6 +169,9 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
   const [payment,setPayment] = useState("full")
   const [received,setReceived] = useState<number | null>(null)
   const [soldOn,setSoldOn] = useState(data.today)
+  const [installTypes,setInstallTypes] = useState<string[]>([])
+  const [jobTitle,setJobTitle] = useState("")
+  const suggestedTitle = useRef("")
   const [installation,setInstallation] = useState(false)
   const requestId = useRef("")
   const sequence = useRef(lines.length)
@@ -158,7 +191,8 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
   const paid = payment==="full" ? total : payment==="partial" ? received ?? 0 : 0
   const needsApproval = isSale && requestApprovals && (discount>0 || paid<total)
   const update = (key: string, patch: Partial<Line>)=>setLines(current=>current.map(line=>line.key===key ? {...line,...patch} : line))
-  const products = data.products.filter(product=>product.active)
+  const products = data.products.filter(product=>product.active && (isSale ? !product.installation : true))
+  const installationTypes = data.products.filter(product=>product.active && product.installation)
   const quantities = new Map<string,number>()
   for (const line of lines) quantities.set(line.productId,(quantities.get(line.productId) ?? 0) + line.quantity)
   let stockError = ""
@@ -188,6 +222,7 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
   const customerError = ambiguousName ? "More than one account has this name. Choose an existing account to continue." :
     namedBuyer && !resolvedCustomerId && !newBuyer ? "Enter the buyer’s name." :
     isSale && lines.length>0 && payment!=="full" && !namedBuyer ? "Choose a customer or agent for an unpaid balance." : ""
+  const installationError = isSale && installation && !jobTitle.trim() ? "Enter a job title for the installation." : ""
   function addProduct(product: Product, separate = false) {
     const key = String(++sequence.current)
     setLines(current=>{
@@ -199,10 +234,23 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
       return [...current,{key,name:product.name,productId:product.id,quantity:1}]
     })
   }
+  function selectInstallation(product: Product, on: boolean) {
+    setInstallTypes(current=>on ? [...current,product.id] : current.filter(id=>id!==product.id))
+    setLines(current=>{
+      if (!on) return current.filter(line=>line.productId!==product.id)
+      if (current.some(line=>line.productId===product.id) || current.length>=100) return current
+      return [...current,{key:String(++sequence.current),name:product.name,productId:product.id,quantity:1}]
+    })
+  }
+  useEffect(()=>{
+    const next = installTypes.map(id=>productMap.get(id)?.name).filter(Boolean).join(" + ")
+    setJobTitle(current=>current === "" || current === suggestedTitle.current ? next : current)
+    suggestedTitle.current = next
+  },[installTypes.join(",")])
 
   async function submit(form: FormData) {
     if (!lines.length) throw new Error("Add at least one item.")
-    if (stockError || discountError || customerError) throw new Error(stockError || discountError || customerError)
+    if (stockError || discountError || customerError || installationError) throw new Error(stockError || discountError || customerError || installationError)
     const payload = {
       customerId:resolvedCustomerId, buyerType, newBuyer, discount, tax, expectedTotal:total,
       lines:lines.map(({key:_key,name:_name,...line})=>!converting ? {...line,expectedUnitPrice:priceForLine(line)} : line)
@@ -217,7 +265,8 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
       action:"sale",...payload,requestId:requestId.current,quoteId:quote?.id,quoteVersion:quote?.version,paid,
       method:v(form,"method") || "Cash",reference:v(form,"reference"),dueDate:opt(form,"dueDate"),
       soldOn: soldOn && soldOn !== data.today ? soldOn : null,
-      installation:canAddInstallation && installation ? { title:v(form,"title"),location:v(form,"location"),technicianId:opt(form,"technicianId"),scheduled:opt(form,"scheduled") } : undefined
+      installation:canAddInstallation && installation ? { title:jobTitle,location:v(form,"location"),technicianId:opt(form,"technicianId"),scheduled:opt(form,"scheduled"),
+        services: installTypes.map(id=>({ productId:id })) } : undefined
     }
     if (needsApproval) {
       await save({action:"requestSaleApproval",sale,reason:v(form,"approvalReason")},"Approval requested")
@@ -281,7 +330,7 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
 
   const submitLabel = needsApproval ? "Request approval" : isSale ? "Complete sale" : quote ? "Save quotation" : "Create quotation"
   return <Form close={close} onSave={submit} label={submitLabel} busyLabel={isSale ? "Recording sale…" : "Saving quotation…"}
-    submitDisabled={!lines.length || Boolean(stockError || discountError || customerError)}
+    submitDisabled={!lines.length || Boolean(stockError || discountError || customerError || installationError)}
     footerSummary={<><small>{isSale ? "Sale total" : "Quotation total"}</small><strong>{money(total)}</strong>
       {isSale && payment!=="full"&&<span>Balance {money(Math.max(0,total-paid))}</span>}</>}>
     <div className="checkout-layout">
@@ -345,12 +394,17 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
           {isSale && canAddInstallation && <>
             <label className="checkbox checkout-installation"><input type="checkbox" checked={installation}
               onChange={event=>setInstallation(event.target.checked)} /> {requestJobs ? "Request an installation" : "Create a linked installation job"}</label>
-            {installation && <div className="form-grid">
-              <Field label="Job title"><input name="title" required placeholder="Office network installation" /></Field>
-              <Field label="Installation location"><input name="location" required={requestJobs} /></Field>
-              <Field label={requestJobs ? "Preferred date" : "Scheduled date"}><input name="scheduled" type="date" min={requestJobs ? data.today : undefined} /></Field>
-              {scheduleJobs && <Field label="Technician"><Select name="technicianId"><option value="">Assign later</option><PeopleOptions people={data.staff.filter(staff=>staff.role==="Technician"&&staff.active)} /></Select></Field>}
-            </div>}
+            {installation && <>
+              <InstallationPicker types={installationTypes} selected={installTypes} price={lookupPrice} toggle={selectInstallation} />
+              <div className="form-grid">
+                <Field label="Job title" hint={installTypes.length ? "Filled from the chosen installation types." : undefined}>
+                  <input value={jobTitle} onChange={event=>setJobTitle(event.target.value)} required placeholder="Office network installation" /></Field>
+                <Field label="Installation location"><input name="location" required={requestJobs} /></Field>
+                <Field label={requestJobs ? "Preferred date" : "Scheduled date"}><input name="scheduled" type="date" min={requestJobs ? data.today : undefined} /></Field>
+                {scheduleJobs && <Field label="Technician"><Select name="technicianId"><option value="">Assign later</option><PeopleOptions people={data.staff.filter(staff=>staff.role==="Technician"&&staff.active)} /></Select></Field>}
+              </div>
+              <ErrorLine message={installationError} />
+            </>}
           </>}
         </div>
       </section>
@@ -421,9 +475,14 @@ export function ReturnForm({ detail, close, save, approval = false }: SimpleProp
 
 export function JobForm({ data, record, close, save }: FormProps & { record?: Job }) {
   const [saleId,setSale] = useState(record?.sale_id ?? "")
+  const [types,setTypes] = useState<string[]>(record?.services?.map(service=>service.product_id) ?? [])
+  const installationTypes = data.products.filter(product=>product.installation && (product.active || types.includes(product.id)))
+  const selectedTotal = types.reduce((sum,id)=>sum+(installationTypes.find(product=>product.id===id)?.price ?? 0),0)
+  const toggle = (product: Product, on: boolean) => setTypes(current=>on ? [...current,product.id] : current.filter(id=>id!==product.id))
   return <Form close={close} label={record ? "Save job" : "Create job"} onSave={f=>save({
     action:"job",id:record?.id,title:v(f,"title"),customerId:opt(f,"customerId"),saleId:saleId||null,
-    technicianId:opt(f,"technicianId"),location:v(f,"location"),notes:v(f,"notes"),scheduled:opt(f,"scheduled"),status:v(f,"status")
+    technicianId:opt(f,"technicianId"),location:v(f,"location"),notes:v(f,"notes"),scheduled:opt(f,"scheduled"),status:v(f,"status"),
+    services:types.map(id=>({ productId:id }))
   },"Installation saved")}>
     <div className="form-grid">
       <Field label="Job title"><input name="title" defaultValue={record?.title} required /></Field>
@@ -437,14 +496,21 @@ export function JobForm({ data, record, close, save }: FormProps & { record?: Jo
       <Field label="Status"><Select name="status" defaultValue={record?.status==="Requested" ? "Scheduled" : record?.status ?? "Scheduled"}>{jobStatuses.map(s=><option key={s}>{s}</option>)}</Select></Field>
     </div>
     <Field label="Work notes"><textarea name="notes" rows={3} defaultValue={record?.notes} /></Field>
+    <InstallationPicker types={installationTypes} selected={types} price={product=>product.price} toggle={toggle} />
+    {types.length>0 && <div className="cart-total"><span>Installation price</span><strong>{money(selectedTotal)}</strong></div>}
   </Form>
 }
 
 export function InstallationRequestForm({ data, close, save }: FormProps) {
   const [saleId,setSale] = useState("")
+  const [types,setTypes] = useState<string[]>([])
+  const installationTypes = data.products.filter(product=>product.installation && product.active)
+  const selectedTotal = types.reduce((sum,id)=>sum+(installationTypes.find(product=>product.id===id)?.price ?? 0),0)
+  const toggle = (product: Product, on: boolean) => setTypes(current=>on ? [...current,product.id] : current.filter(id=>id!==product.id))
   return <Form close={close} label="Send installation request" onSave={form=>save({
     action:"installationRequest",title:v(form,"title"),customerId:opt(form,"customerId"),saleId:saleId || null,
-    location:v(form,"location"),notes:v(form,"notes"),scheduled:opt(form,"scheduled")
+    location:v(form,"location"),notes:v(form,"notes"),scheduled:opt(form,"scheduled"),
+    services:types.map(id=>({ productId:id }))
   },"Installation requested")}>
     <div className="form-grid">
       <Field label="Work title"><input name="title" required maxLength={160} placeholder="Office Wi-Fi setup" /></Field>
@@ -455,6 +521,8 @@ export function InstallationRequestForm({ data, close, save }: FormProps) {
       <Field label="Location"><input name="location" required maxLength={2000} /></Field>
       <Field label="Preferred date"><input name="scheduled" type="date" min={data.today} /></Field>
     </div>
+    <InstallationPicker types={installationTypes} selected={types} price={product=>product.price} toggle={toggle} />
+    {types.length>0 && <div className="cart-total"><span>Installation price</span><strong>{money(selectedTotal)}</strong></div>}
     <Field label="Work notes" hint={saleId ? "Add any equipment or instructions beyond the linked sale." : "List the equipment needed and any instructions for the technician."}>
       <textarea name="notes" rows={4} maxLength={2000} />
     </Field>

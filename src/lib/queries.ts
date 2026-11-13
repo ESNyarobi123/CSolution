@@ -23,7 +23,7 @@ export const saleSummary = `
 
 const jobSummary = `
   SELECT j.id,j.number,j.title,j.customer_id,COALESCE(c.name,s.customer_name) AS customer,j.sale_id,s.number AS sale,
-    j.technician_id,u.name AS technician,j.location,j.status,j.scheduled::text,j.notes,j.created_at,
+    j.technician_id,u.name AS technician,j.location,j.status,j.scheduled::text,j.notes,j.services,j.created_at,
     COALESCE((SELECT sum(cost*quantity) FROM installation_items WHERE job_id=j.id),0) AS material_cost,
     COALESCE((SELECT sum(amount) FROM expenses WHERE job_id=j.id),0) AS extra_cost
   FROM installations j LEFT JOIN customers c ON c.id=j.customer_id LEFT JOIN sales s ON s.id=j.sale_id
@@ -108,7 +108,7 @@ export async function getSnapshot(user: User, days = 7): Promise<Snapshot> {
     first<Business>(pool, "SELECT name,phone,email,address,invoice_prefix,currency FROM business WHERE id=1"),
     first<{ today: string }>(pool, `SELECT ${localDay}::text AS today`),
     rows<Product>(pool, `SELECT p.id,p.name,p.sku,p.category_id,p.brand_id,c.name AS category,b.name AS brand,p.type,
-      p.unit,p.description,${costs ? "p.cost," : ""}p.price,p.agent_price,p.reorder,p.warranty,p.on_hand,p.active,p.image_url
+      p.unit,p.description,${costs ? "p.cost," : ""}p.price,p.agent_price,p.reorder,p.warranty,p.on_hand,p.active,p.image_url,p.installation
       FROM products p LEFT JOIN categories c ON c.id=p.category_id LEFT JOIN brands b ON b.id=p.brand_id
       ${ownSales ? "WHERE p.active" : ""} ORDER BY p.active DESC,p.name`),
     groupCounts("categories"), groupCounts("brands"),

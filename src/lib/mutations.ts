@@ -24,9 +24,10 @@ const cart = {
   lines: z.array(line).min(1).max(100), expectedTotal: transactionAmount.optional(),
   discount: amount.default(0), tax: amount.default(0)
 }
+const installationSelection = z.array(z.object({ productId: id })).max(20).default([])
 const saleInput = z.object({ action: z.literal("sale"), ...cart, requestId: id, quoteId: id.optional(), quoteVersion: z.number().int().positive().optional(), paid: transactionAmount.default(0),
   method: z.enum(methods), reference: text, dueDate: day.nullable(), soldOn: day.nullable().optional(),
-  installation: z.object({ title: name, location: text, technicianId: id.nullable(), scheduled: day.nullable() }).optional() })
+  installation: z.object({ title: name, location: text, technicianId: id.nullable(), scheduled: day.nullable(), services: installationSelection }).optional() })
 const returnInput = z.object({ action: z.literal("return"), requestId: id, saleId: id, lineId: id, quantity, restock: z.boolean(), reason: name })
 const schema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("group"), kind: z.enum(["categories", "brands"]), id: id.optional(), name, description: text }),
@@ -49,9 +50,11 @@ const schema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("reviewApproval"), id, decision: z.enum(["approve","reject"]), note: text }),
   z.object({ action: z.literal("completeApprovedSale"), id }),
   z.object({ action: z.literal("job"), id: id.optional(), title: name, customerId: id.nullable(), saleId: id.nullable(),
-    technicianId: id.nullable(), location: text, notes: text, scheduled: day.nullable(), status: z.enum(jobStatuses) }),
+    technicianId: id.nullable(), location: text, notes: text, scheduled: day.nullable(), status: z.enum(jobStatuses), services: installationSelection }),
   z.object({ action: z.literal("installationRequest"), title: name, customerId: id.nullable(), saleId: id.nullable(),
-    location: z.string().trim().min(1,"Enter the installation location.").max(2000), notes: text, scheduled: day.nullable() }),
+    location: z.string().trim().min(1,"Enter the installation location.").max(2000), notes: text, scheduled: day.nullable(), services: installationSelection }),
+  z.object({ action: z.literal("installationType"), id: id.optional(), name, price: amount, cost: amount.default(0),
+    agentPrice: amount.nullable(), description: text, active: z.boolean().default(true) }),
   z.object({ action: z.literal("jobStatus"), id, status: z.enum(jobStatuses), notes: text }),
   z.object({ action: z.literal("material"), jobId: id, productId: id, quantity, serial: z.string().trim().max(100).default("") }),
   z.object({ action: z.literal("expense"), id: id.optional(), description: name, amount: amount.min(1), incurred: day, jobId: id.nullable(), category: z.enum(expenseCategories).optional(),
@@ -71,7 +74,7 @@ const rules: Record<Action["action"], Capability> = {
   group: "catalog", product: "catalog", customer: "customers", supplier: "inventory", stock: "inventory", purchase: "inventory",
   sale: "sales", quote: "sales", payment: "sales", return: "pricing", job: "jobs", jobStatus: "jobs", material: "jobs",
   requestSaleApproval: "requestApprovals", requestReturnApproval: "requestApprovals", reviewApproval: "reviewApprovals", completeApprovedSale: "requestApprovals",
-  installationRequest: "requestJobs", expense: "reports", settings: "admin", staff: "admin",
+  installationRequest: "requestJobs", installationType: "scheduleJobs", expense: "reports", settings: "admin", staff: "admin",
   purchaseReference: "admin", productStatus: "admin", staffStatus: "admin", deleteRecord: "admin"
 }
 
@@ -161,6 +164,17 @@ async function addPayment(db: Client, user: User, saleId: string, requestId: str
 
 async function checkTech(db: Client, tech: string | null) {
   if (tech) required(await first(db, "SELECT id FROM staff WHERE id=$1 AND role='Technician' AND active", [tech]), "Choose an active technician.")
+}
+
+// Installation types are service products, so the price lives in the catalog.
+// The job only keeps a snapshot of what was agreed, in the order it was chosen.
+async function installationServices(db: Client, requested: { productId: string }[]) {
+  const ids = [...new Set(requested.map(item => item.productId))]
+  if (!ids.length) return []
+  const found = await rows<Product>(db, "SELECT id,name,price FROM products WHERE id=ANY($1::uuid[]) AND installation", [ids])
+  const byId = new Map(found.map(item => [item.id,item]))
+  return ids.map(productId => required(byId.get(productId), "Choose a current installation type."))
+    .map(item => ({ product_id: item.id, name: item.name, price: item.price }))
 }
 
 type CheckoutPerson = { id:string | null; name:string; address:string; phone:string; kind:typeof customerTypes[number] }
@@ -330,8 +344,15 @@ async function checkout(db: Client, user: User, input: Checkout, options?: { req
   await addPayment(db,user,saleId,input.requestId,input.paid,input.method,input.reference,soldOn)
   if (input.installation) {
     const job = input.installation
-    await db.query("INSERT INTO installations (title,customer_id,sale_id,technician_id,location,scheduled,status,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-      [job.title,customer.id,saleId,job.technicianId,job.location,job.scheduled,frontOffice ? "Requested" : "Scheduled",user.id])
+    const chosen = await installationServices(db,job.services)
+    const ids = chosen.map(item => item.product_id)
+    // Use the price that actually landed on the invoice so agent pricing shows correctly.
+    const agreed = ids.length ? (await rows<{ product_id:string; name:string; price:number }>(db,
+      `SELECT l.product_id,p.name,l.price FROM sale_items l JOIN products p ON p.id=l.product_id
+       WHERE l.sale_id=$1 AND l.product_id=ANY($2::uuid[]) ORDER BY p.name`,[saleId,ids]))
+      .filter((item,index,list)=>list.findIndex(other=>other.product_id===item.product_id)===index) : []
+    await db.query("INSERT INTO installations (title,customer_id,sale_id,technician_id,location,scheduled,status,created_by,services) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+      [job.title,customer.id,saleId,job.technicianId,job.location,job.scheduled,frontOffice ? "Requested" : "Scheduled",user.id,JSON.stringify(agreed)])
   }
   if (quote) await db.query("UPDATE quotations SET sale_id=$1 WHERE id=$2", [saleId,quote.id])
   await audit(db,user,"Sale completed",saved.number)
@@ -506,6 +527,9 @@ export async function changeShop(raw: unknown, user: User) {
               await first(db,"SELECT id FROM stock_movements WHERE product_id=$1 LIMIT 1",[input.id]))) {
             throw new ShopError("This product has stock history. Create a separate product for a different item type.",409)
           }
+          if (previous.installation && input.type !== "Service") {
+            throw new ShopError("An installation type must stay a service. Edit it under Installations → Types & prices.",409)
+          }
         }
         const values = [input.name,input.sku.toUpperCase(),input.categoryId,input.brandId,input.type,input.unit,input.description,
           input.cost,input.price,input.agentPrice,input.type === "Stocked" ? input.reorder : 0,input.warranty,input.imageUrl,input.active]
@@ -522,6 +546,24 @@ export async function changeShop(raw: unknown, user: User) {
             (previous.type === "Stocked" && previous.on_hand > 0 ? ` · stock value ${previous.on_hand} × ${value(input.cost)}` : ""))
         }
         await audit(db,user,"Product saved",input.sku.toUpperCase())
+        return saved
+      }
+      case "installationType": {
+        const values = [input.name,input.price,input.cost,input.agentPrice,input.description,input.active]
+        let saved
+        if (input.id) {
+          saved = required(await first(db,`UPDATE products SET name=$1,price=$2,cost=$3,agent_price=$4,description=$5,active=$6
+            WHERE id=$7 AND installation RETURNING id`,[...values,input.id]),"Installation type could not be found.")
+        } else {
+          const base = "INST-" + (input.name.toUpperCase().replace(/[^A-Z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,24) || "SERVICE")
+          const taken = await first(db,"SELECT id FROM products WHERE sku=$1",[base])
+          const sku = taken ? base + "-" + randomUUID().slice(0,4).toUpperCase() : base
+          saved = required(await first(db,`INSERT INTO products (name,sku,type,unit,description,cost,price,agent_price,installation)
+            VALUES ($1,$2,'Service','job',$3,$4,$5,$6,true) RETURNING id`,
+            [input.name,sku,input.description,input.cost,input.price,input.agentPrice]),"Installation type could not be saved.")
+        }
+        await audit(db,user,input.id ? "Installation type updated" : "Installation type added",
+          input.name + " · TZS " + input.price.toLocaleString("en-US",{ maximumFractionDigits: 0 }))
         return saved
       }
       case "customer":
@@ -596,9 +638,10 @@ export async function changeShop(raw: unknown, user: User) {
         const sale = input.saleId ? await lockSale(db,user,input.saleId) : undefined
         const customerId = sale ? sale.customer_id : input.customerId
         if (!sale && !customerId) throw new ShopError("Choose a customer or a linked sale.")
-        const saved = required(await first(db,`INSERT INTO installations (title,customer_id,sale_id,location,scheduled,notes,status,created_by)
-          VALUES ($1,$2,$3,$4,$5,$6,'Requested',$7) RETURNING id,number`,
-          [input.title,customerId,input.saleId,input.location,input.scheduled,input.notes,user.id]),"Installation request could not be saved.")
+        const services = await installationServices(db,input.services)
+        const saved = required(await first(db,`INSERT INTO installations (title,customer_id,sale_id,location,scheduled,notes,status,created_by,services)
+          VALUES ($1,$2,$3,$4,$5,$6,'Requested',$7,$8) RETURNING id,number`,
+          [input.title,customerId,input.saleId,input.location,input.scheduled,input.notes,user.id,JSON.stringify(services)]),"Installation request could not be saved.")
         await audit(db,user,"Installation requested",saved.number)
         return saved
       }
@@ -610,12 +653,12 @@ export async function changeShop(raw: unknown, user: User) {
           const previous = required(await first(db,"SELECT sale_id FROM installations WHERE id=$1 FOR UPDATE",[input.id]),"Job could not be found.")
           if (previous.sale_id !== input.saleId) throw new ShopError("A job’s linked sale is fixed when the job is created.")
         }
-        const values = [input.title,sale ? sale.customer_id : input.customerId,input.saleId,input.technicianId,input.location,input.notes,input.scheduled,input.status]
+        const values = [input.title,sale ? sale.customer_id : input.customerId,input.saleId,input.technicianId,input.location,input.notes,input.scheduled,input.status,JSON.stringify(await installationServices(db,input.services))]
         const saved = required(input.id ?
           await first(db,`UPDATE installations SET title=$1,customer_id=$2,sale_id=$3,technician_id=$4,location=$5,notes=$6,scheduled=$7,
-            status=$8,completed_at=CASE WHEN $8='Completed' THEN COALESCE(completed_at,now()) ELSE completed_at END WHERE id=$9 RETURNING id,number`,[...values,input.id]) :
-          await first(db,`INSERT INTO installations (title,customer_id,sale_id,technician_id,location,notes,scheduled,status,completed_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,CASE WHEN $8='Completed' THEN now() END) RETURNING id,number`,values),"Job could not be found.")
+            status=$8,completed_at=CASE WHEN $8='Completed' THEN COALESCE(completed_at,now()) ELSE completed_at END,services=$9 WHERE id=$10 RETURNING id,number`,[...values,input.id]) :
+          await first(db,`INSERT INTO installations (title,customer_id,sale_id,technician_id,location,notes,scheduled,status,completed_at,services)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,CASE WHEN $8='Completed' THEN now() END,$9) RETURNING id,number`,values),"Job could not be found.")
         await audit(db,user,"Installation saved",saved.number)
         return saved
       }

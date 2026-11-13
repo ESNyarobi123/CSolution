@@ -13,7 +13,8 @@ export type Product = {
   id: string; name: string; sku: string; category_id: string | null; brand_id: string | null;
   category: string | null; brand: string | null; type: typeof productTypes[number]; unit: string;
   description: string; cost?: number; price: number; agent_price: number | null;
-  reorder: number; warranty: number; on_hand: number; active: boolean; image_url: string | null
+  reorder: number; warranty: number; on_hand: number; active: boolean; image_url: string | null;
+  installation: boolean
 }
 export type Person = { id: string; name: string; phone: string; email: string; address: string }
 export type Customer = Person & { kind: typeof customerTypes[number]; code: string | null; sales_count: number; outstanding: number }
@@ -34,7 +35,8 @@ export type SaleLine = {
 }
 export type SaleDetail = { sale: Sale; lines: SaleLine[]; payments: { id: string; method: string; amount: number; reference: string; created_at: string }[]; returns: { id: string; product: string; quantity: number; credit: number; refund: number; reason: string; created_at: string }[] }
 export type Quote = { id: string; version: number; number: string; customer_id: string | null; customer_name: string; buyer_type: BuyerType; lines: (Line & { name: string; price: number })[]; discount: number; tax: number; total: number; valid_until: string | null; sale_id: string | null; created_at: string }
-export type Job = { id: string; number: string; title: string; customer_id: string | null; customer: string | null; sale_id: string | null; sale: string | null; technician_id: string | null; technician: string | null; location: string; status: typeof jobStatuses[number]; scheduled: string | null; notes: string; material_cost?: number; extra_cost?: number; created_at: string }
+export type JobService = { product_id: string; name: string; price: number }
+export type Job = { id: string; number: string; title: string; customer_id: string | null; customer: string | null; sale_id: string | null; sale: string | null; technician_id: string | null; technician: string | null; location: string; status: typeof jobStatuses[number]; scheduled: string | null; notes: string; services: JobService[]; material_cost?: number; extra_cost?: number; created_at: string }
 export type JobDetail = { job: Job; materials: { id: string; name: string; quantity: number; serial: string; cost?: number; from_sale: boolean }[]; expenses: Expense[] }
 export type Expense = { id: string; description: string; amount: number; job_id: string | null; job: string | null; incurred: string; category: typeof expenseCategories[number]; method: typeof methods[number] | null; reference: string; notes: string }
 export type Staff = { id: string; name: string; email: string; role: Role; active: boolean }

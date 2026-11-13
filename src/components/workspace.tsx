@@ -8,7 +8,7 @@ import { date, initials, money, num, RequestError, requestJSON } from "@/lib/for
 import type { JobDetail, SaleDetail, Snapshot } from "@/lib/model"
 import { Dashboard, reportStart } from "./dashboard"
 import { QuoteDocument, SaleDocument } from "./documents"
-import { CartForm, ContactForm, ExpenseForm, GroupForm, InstallationRequestForm, JobForm, JobStatusForm, MaterialForm, PaymentForm, ProductForm, PurchaseForm, PurchaseReferenceForm, ReturnForm, SettingsForm, StaffForm, StockForm, type Save } from "./forms"
+import { CartForm, ContactForm, ExpenseForm, GroupForm, InstallationRequestForm, InstallationTypeForm, JobForm, JobStatusForm, MaterialForm, PaymentForm, ProductForm, PurchaseForm, PurchaseReferenceForm, ReturnForm, SettingsForm, StaffForm, StockForm, type Save } from "./forms"
 import { ApprovalDetail, Approvals, FrontOfficeDashboard } from "./front-office"
 import { Analytics, CustomerDetail, Customers, Documents, Expenses, Groups, Installations, Inventory, ProductDetail, Products, Sales, Settings, Suppliers, type Panel } from "./screens"
 import { ActionMenu, Badge, Brand, Empty, ErrorLine, Form, Modal, SearchBox, Select, Table } from "./ui"
@@ -303,6 +303,8 @@ function WorkspaceModal({ panel, close, open, go, formProps }: {
     </Modal>
     case "job": return modal(panel.record?"Edit installation":"New installation",<JobForm {...formProps} record={panel.record} />,true)
     case "installationRequest": return modal("New installation request",<InstallationRequestForm {...formProps} />,true)
+    case "installationType": return modal(panel.record ? "Edit installation type" : "Add installation type",
+      <InstallationTypeForm {...formProps} record={panel.record} />)
     case "approvalDetail": {
       const approval = data.approvals.find(item=>item.id===panel.id)
       return modal(approval?.kind==="Return" ? "Return approval" : "Sale terms approval",approval ?
@@ -469,6 +471,12 @@ function JobView({ detail,data,open }: { detail:JobDetail;data:Snapshot;open:(pa
       {handlesJobs && j.status!=="Requested"&&j.status!=="Completed"&&j.status!=="Cancelled"&&<button className="button primary small" onClick={()=>open({kind:"material",id:j.id})}><Plus size={16} /> Add material</button>}
       {can(data.user.role,"reports")&&<button className="button secondary small" onClick={()=>open({kind:"expense",job:j})}><Plus size={16} /> Record expense</button>}
     </div>
+    {!!j.services?.length && <div className="detail-block"><h3>Agreed installation services</h3>
+      <Table rows={j.services.map((service,index)=>({...service,id:String(index)}))} columns={[
+        {label:"Service",cell:service=>service.name},{label:"Price",cell:service=>money(service.price),numeric:true}
+      ]} />
+      <p className="detail-note">Installation price {money(j.services.reduce((sum,service)=>sum+service.price,0))}{j.sale ? " · already included in the linked sale" : " · quoted for this job"}.</p>
+    </div>}
     <div className="detail-block"><h3>Materials & equipment</h3><Table rows={detail.materials} empty="No materials recorded" columns={[
       {label:"Item",cell:m=><strong>{m.name}</strong>},{label:"Source",cell:m=>m.from_sale?"Linked sale":"Extra stock"},
       {label:"Quantity",cell:m=>num(m.quantity)},{label:"Serial",cell:m=>m.serial||"—"}

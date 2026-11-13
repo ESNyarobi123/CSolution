@@ -16,7 +16,7 @@ export type Panel =
   { kind:"customer"; record?:Customer } | { kind:"customerDetail"; record:Customer } |
   { kind:"supplier"; record?:Person } | { kind:"staff"; record?:Staff } |
   { kind:"job"; record?:Job } | { kind:"expense"; job?:Job; record?:Expense } | { kind:"expenseDetail"; record:Expense } |
-  { kind:"installationRequest" } | { kind:"approvalDetail"; id:string } |
+  { kind:"installationRequest" } | { kind:"installationType"; record?:Product } | { kind:"approvalDetail"; id:string } |
   { kind:"purchaseReference"; record:Purchase } |
   { kind:"deleteRecord"; id:string; record:DeletableRecord; title:string } |
   { kind:"productStatus"; id:string; title:string; active:boolean } |
@@ -414,9 +414,24 @@ export function Customers({ data,open }: Props) {
 }
 export function Installations({ data,open }: Props) {
   const [status,setStatus] = useState("")
+  const [tab,setTab] = useState("Jobs")
   const intake = can(data.user.role,"requestJobs")
   const schedules = can(data.user.role,"scheduleJobs")
+  const types = data.products.filter(product=>product.installation)
   return <>
+    <Tabs tabs={["Jobs","Types & prices"]} value={tab} change={setTab} />
+    {tab==="Types & prices" ? <>
+      {schedules && <Actions><Add onClick={()=>open({kind:"installationType"})}>Add installation type</Add></Actions>}
+      <Filtered items={types} search={p=>fields(p.name,p.sku,p.description)} empty="No installation types yet"
+        columns={[
+          {label:"Installation type",cell:p=><><strong>{p.name}</strong><small className="table-sub">{p.description||p.sku}</small></>},
+          {label:"Price",cell:p=><strong>{money(p.price)}</strong>,numeric:true},
+          {label:"Agent price",cell:p=>p.agent_price===null ? "—" : money(p.agent_price),numeric:true},
+          {label:"Status",cell:p=><Badge value={p.active?"Active":"Archived"} />},
+          ...(schedules ? [rowActions<Product>(p=>p.name,p=>[editAction("Edit installation type",()=>open({kind:"installationType",record:p}))])] : [])
+        ]} />
+      <p className="detail-note">The sales team picks these when they create a sale, so the installation price is added to the invoice automatically.</p>
+    </> : <>
     {(intake || schedules) && <Actions><Add onClick={()=>open({kind:intake ? "installationRequest" : "job"})}>{intake ? "New installation request" : "New installation"}</Add></Actions>}
     <Filtered items={data.jobs} search={j=>fields(j.number,j.title,j.customer,j.technician,j.location,j.sale)}
       filter={j=>!status || j.status===status} empty="No installation jobs found" columns={[
@@ -430,6 +445,7 @@ export function Installations({ data,open }: Props) {
         ...(!j.sale_id && (j.status==="Scheduled" || j.status==="Cancelled") ? deleteActions(data,open,"installations",j.id,j.title) : [])
       ])
     ]}><Select aria-label="Job status" value={status} onChange={e=>setStatus(e.target.value)}><option value="">All statuses</option>{jobStatuses.map(item=><option key={item}>{item}</option>)}</Select></Filtered>
+    </>}
   </>
 }
 export function Suppliers({ data,open }: Props) {
