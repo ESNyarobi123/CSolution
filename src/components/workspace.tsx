@@ -29,7 +29,7 @@ const sections: NavigationGroup[] = [
     { id:"suppliers",title:"Suppliers & purchases",heading:"Suppliers & purchases",sub:"Manage suppliers and receive stock into the shop.",icon:Truck,permission:"inventory" }
   ]},
   { name:"OPERATIONS", links:[
-    { id:"installations",title:"Installations",heading:"Installations",sub:"Assign technicians and track materials and service work.",icon:RadioTower,permission:"viewJobs" },
+    { id:"installations",title:"Installations",heading:"Installations",sub:"Set the installation types and prices charged on sales.",icon:RadioTower,permission:"viewJobs" },
     { id:"approvals",title:"Approvals",heading:"Approvals",sub:"Review requests for discounts, credit and returns.",icon:ClipboardCheck,permission:"viewApprovals" },
     { id:"expenses",title:"Expenses",heading:"Expenses",sub:"Record operating costs and expenses linked to installation jobs.",icon:CircleDollarSign,permission:"reports" },
     { id:"analytics",title:"Analytics & reports",heading:"Analytics & reports",sub:"Measure revenue, costs and profitability across the shop.",icon:ChartNoAxesCombined,permission:"reports" },

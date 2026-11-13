@@ -26,7 +26,7 @@ Kwa database tupu, nakili `.env.example` kwenda `.env` kwenye mazingira mapya, w
 | Sales & POS | Catalog yenye search na filters za category/brand, cart yenye stock na jumla, mauzo ya kifaa pekee, kifaa na waya, au kifaa na installation. Malipo kamili, partial payment, mkopo na returns |
 | Customers & agents | Wasifu, bei ya agent, salio, historia ya manunuzi na installation |
 | Documents | Quotations, invoices na receipts zenye logo. Pakua PDF, chapisha au geuza quotation kuwa sale |
-| Installations | Aina za installation na bei zake, job inayounganishwa na sale au job ya kujitegemea, fundi, eneo, hali ya kazi, vifaa na gharama |
+| Installations | Admin/Manager: aina za installation na bei zake. Front Office: maombi ya installation na hali yake. Fundi anaona kazi zake |
 | Reports | Mauzo, gross profit, net profit, agents, bidhaa, brands, categories, gharama za installation na CSV |
 | Settings | Company profile, roles za staff, audit log na PostgreSQL backup kwa msimamizi |
 
@@ -36,7 +36,7 @@ Nenda **Installations → Types & prices** kuongeza aina za installation zenye b
 
 Kwenye **New sale**, chagua kifaa, kisha weka tiki kwenye installation na uchague aina moja au zaidi. Kila aina uliyochagua inaingia kwenye cart kama line yenye bei yake, hivyo invoice, receipt na ripoti zinahesabu mapato ya installation sawa na bidhaa. Ukiiondoa kwenye orodha, line hiyo inatolewa kwenye cart. Jina la job linajazwa kutoka aina ulizochagua na unaweza kulibadilisha.
 
-Ombi la installation (Front Office) na job ya kujitegemea (Admin/Manager) nao zinatumia orodha hiyo hiyo, na job inahifadhi aina zilizokubaliwa pamoja na bei yake.
+Ombi la installation (Front Office) linatumia orodha hiyo hiyo, na job inahifadhi aina zilizokubaliwa pamoja na bei yake. Ukurasa wa **Installations** kwa Admin/Manager unaonyesha aina na bei tu; kazi yenyewe inafuatiliwa kwenye sale iliyounganishwa, wasifu wa mteja na dashboard.
 
 ## Kusajili bidhaa iliyopo dukani
 

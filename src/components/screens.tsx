@@ -418,21 +418,23 @@ export function Installations({ data,open }: Props) {
   const intake = can(data.user.role,"requestJobs")
   const schedules = can(data.user.role,"scheduleJobs")
   const types = data.products.filter(product=>product.installation)
-  return <>
-    <Tabs tabs={["Jobs","Types & prices"]} value={tab} change={setTab} />
-    {tab==="Types & prices" ? <>
-      {schedules && <Actions><Add onClick={()=>open({kind:"installationType"})}>Add installation type</Add></Actions>}
-      <Filtered items={types} search={p=>fields(p.name,p.sku,p.description)} empty="No installation types yet"
-        columns={[
-          {label:"Installation type",cell:p=><><strong>{p.name}</strong><small className="table-sub">{p.description||p.sku}</small></>},
-          {label:"Price",cell:p=><strong>{money(p.price)}</strong>,numeric:true},
-          {label:"Agent price",cell:p=>p.agent_price===null ? "—" : money(p.agent_price),numeric:true},
-          {label:"Status",cell:p=><Badge value={p.active?"Active":"Archived"} />},
-          ...(schedules ? [rowActions<Product>(p=>p.name,p=>[editAction("Edit installation type",()=>open({kind:"installationType",record:p}))])] : [])
-        ]} />
-      <p className="detail-note">The sales team picks these when they create a sale, so the installation price is added to the invoice automatically.</p>
-    </> : <>
-    {(intake || schedules) && <Actions><Add onClick={()=>open({kind:intake ? "installationRequest" : "job"})}>{intake ? "New installation request" : "New installation"}</Add></Actions>}
+  const typeList = <>
+    {schedules && <Actions><Add onClick={()=>open({kind:"installationType"})}>Add installation type</Add></Actions>}
+    <Filtered items={types} search={p=>fields(p.name,p.sku,p.description)} empty="No installation types yet"
+      columns={[
+        {label:"Installation type",cell:p=><><strong>{p.name}</strong><small className="table-sub">{p.description||p.sku}</small></>},
+        {label:"Price",cell:p=><strong>{money(p.price)}</strong>,numeric:true},
+        {label:"Agent price",cell:p=>p.agent_price===null ? "—" : money(p.agent_price),numeric:true},
+        {label:"Status",cell:p=><Badge value={p.active?"Active":"Archived"} />},
+        ...(schedules ? [rowActions<Product>(p=>p.name,p=>[editAction("Edit installation type",()=>open({kind:"installationType",record:p}))])] : [])
+      ]} />
+    <p className="detail-note">The sales team picks these when they create a sale, so the installation price is added to the invoice automatically.</p>
+  </>
+  // Management sets the types and prices here; the jobs themselves are worked from
+  // the linked sale, the customer record and the dashboard.
+  if (schedules) return typeList
+  const jobs = <>
+    {intake && <Actions><Add onClick={()=>open({kind:"installationRequest"})}>New installation request</Add></Actions>}
     <Filtered items={data.jobs} search={j=>fields(j.number,j.title,j.customer,j.technician,j.location,j.sale)}
       filter={j=>!status || j.status===status} empty="No installation jobs found" columns={[
       {label:"Job",cell:j=><><TextLink run={()=>open({kind:"jobDetail",id:j.id})}>{j.title}</TextLink><small className="table-sub">{j.number}</small></>},
@@ -440,12 +442,14 @@ export function Installations({ data,open }: Props) {
       {label:"Location",cell:j=>j.location||"—"},{label:"Service date",cell:j=><>{date(j.scheduled)}{j.scheduled && j.status==="Requested" && <small className="table-sub">Preferred</small>}</>},{label:"Status",cell:j=><Badge value={j.status} />},
       rowActions<Job>(j=>j.number,j=>[
         {label:"View installation",icon:Eye,run:()=>open({kind:"jobDetail",id:j.id})},
-        ...(schedules ? [editAction(j.status==="Requested" ? "Schedule installation" : "Edit installation",()=>open({kind:"job",record:j}))] :
-          !intake ? [editAction("Update status",()=>open({kind:"jobStatus",id:j.id}))] : []),
+        ...(intake ? [] : [editAction("Update status",()=>open({kind:"jobStatus",id:j.id}))]),
         ...(!j.sale_id && (j.status==="Scheduled" || j.status==="Cancelled") ? deleteActions(data,open,"installations",j.id,j.title) : [])
       ])
     ]}><Select aria-label="Job status" value={status} onChange={e=>setStatus(e.target.value)}><option value="">All statuses</option>{jobStatuses.map(item=><option key={item}>{item}</option>)}</Select></Filtered>
-    </>}
+  </>
+  return <>
+    <Tabs tabs={["Jobs","Types & prices"]} value={tab} change={setTab} />
+    {tab==="Types & prices" ? typeList : jobs}
   </>
 }
 export function Suppliers({ data,open }: Props) {

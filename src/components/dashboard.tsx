@@ -200,7 +200,7 @@ export function Dashboard({ data, go, openSale, openQuote, openJob }: {
         {jobs.length ? <div className="job-list">{jobs.slice(0,4).map(job=><button className="job-row" key={job.id} onClick={()=>openJob(job.id)}>
           <div><strong>{job.title}</strong><small>{job.scheduled ? date(job.scheduled)+" · " : ""}{job.customer ?? job.number}</small></div><Badge value={job.status} />
         </button>)}</div> : <Empty title="No active installations" icon={RadioTower} />}
-        <button className="stock-footer" onClick={()=>go("installations")}>View installations <ArrowRight size={16} /></button>
+        <button className="stock-footer" onClick={()=>go("installations")}>{can(data.user.role,"scheduleJobs") ? "Installation types & prices" : "View installations"} <ArrowRight size={16} /></button>
       </article>}
     </section>
   </div>
