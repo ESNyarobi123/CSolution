@@ -133,6 +133,7 @@ function InstallationPicker({ types, selected, price, toggle }: {
 }) {
   return <fieldset className="install-type-options">
     <legend>Installation types</legend>
+    <p className="checkout-hint">{selected.length ? `${selected.length} chosen · ${money(types.filter(type=>selected.includes(type.id)).reduce((sum,type)=>sum+price(type),0))} on this sale.` : "Choose one or more; each type becomes its own line on the invoice and receipt."}</p>
     {!types.length && <p className="checkout-hint">No installation types yet. Add them under Installations → Types &amp; prices.</p>}
     {types.map(type=><label className="install-type-option" key={type.id}>
       <input type="checkbox" checked={selected.includes(type.id)} onChange={event=>toggle(type,event.target.checked)} />
@@ -242,9 +243,22 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
       return [...current,{key:String(++sequence.current),name:product.name,productId:product.id,quantity:1}]
     })
   }
+  // Unticking the job drops the installation lines too, so the invoice and the
+  // job never disagree about what was agreed.
+  function toggleInstallation(on: boolean) {
+    setInstallation(on)
+    if (on) return
+    setInstallTypes([])
+    setJobTitle("")
+    suggestedTitle.current = ""
+    setLines(current=>current.filter(line=>!productMap.get(line.productId)?.installation))
+  }
   useEffect(()=>{
     const next = installTypes.map(id=>productMap.get(id)?.name).filter(Boolean).join(" + ")
-    setJobTitle(current=>current === "" || current === suggestedTitle.current ? next : current)
+    // Compare against the previous suggestion captured now: the updater runs
+    // later, after the ref already holds the next value.
+    const previous = suggestedTitle.current
+    setJobTitle(current=>current === "" || current === previous ? next : current)
     suggestedTitle.current = next
   },[installTypes.join(",")])
 
@@ -393,7 +407,7 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
           </Field>}
           {isSale && canAddInstallation && <>
             <label className="checkbox checkout-installation"><input type="checkbox" checked={installation}
-              onChange={event=>setInstallation(event.target.checked)} /> {requestJobs ? "Request an installation" : "Create a linked installation job"}</label>
+              onChange={event=>toggleInstallation(event.target.checked)} /> {requestJobs ? "Request an installation" : "Create a linked installation job"}</label>
             {installation && <>
               <InstallationPicker types={installationTypes} selected={installTypes} price={lookupPrice} toggle={selectInstallation} />
               <div className="form-grid">
