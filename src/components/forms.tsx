@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { Box, CircleDollarSign, CopyPlus, CreditCard, FileText, ImagePlus, Minus, PackageOpen, Plus, ShoppingCart, Trash2, UploadCloud, Wallet } from "lucide-react"
+import { Box, CircleDollarSign, CopyPlus, CreditCard, FileText, ImagePlus, Minus, PackageOpen, Plus, ShoppingCart, Trash2, UploadCloud, Wallet, Wrench } from "lucide-react"
 import { can, roles } from "@/lib/access"
 import { date, money, num, requestJSON } from "@/lib/format"
 import { customerTypes, expenseCategories, jobStatuses, methods, productTypes, type BuyerType, type Customer, type Expense, type Group, type Job, type JobDetail, type Line, type Person, type Product, type Purchase, type Quote, type Sale, type SaleDetail, type Snapshot, type Staff } from "@/lib/model"
@@ -170,10 +170,8 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
   const [payment,setPayment] = useState("full")
   const [received,setReceived] = useState<number | null>(null)
   const [soldOn,setSoldOn] = useState(data.today)
-  const [installTypes,setInstallTypes] = useState<string[]>([])
   const [jobTitle,setJobTitle] = useState("")
   const suggestedTitle = useRef("")
-  const [installation,setInstallation] = useState(false)
   const requestId = useRef("")
   const sequence = useRef(lines.length)
   const cartHeading = useRef<HTMLHeadingElement>(null)
@@ -194,6 +192,10 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
   const update = (key: string, patch: Partial<Line>)=>setLines(current=>current.map(line=>line.key===key ? {...line,...patch} : line))
   const products = data.products.filter(product=>product.active && (isSale ? !product.installation : true))
   const installationTypes = data.products.filter(product=>product.active && product.installation)
+  // The cart is the single source of truth: an installation type counts as
+  // chosen while its priced line is on the sale, so the job, the invoice and
+  // the receipt can never disagree.
+  const installTypes = lines.filter(line=>productMap.get(line.productId)?.installation).map(line=>line.productId)
   const quantities = new Map<string,number>()
   for (const line of lines) quantities.set(line.productId,(quantities.get(line.productId) ?? 0) + line.quantity)
   let stockError = ""
@@ -223,7 +225,7 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
   const customerError = ambiguousName ? "More than one account has this name. Choose an existing account to continue." :
     namedBuyer && !resolvedCustomerId && !newBuyer ? "Enter the buyer’s name." :
     isSale && lines.length>0 && payment!=="full" && !namedBuyer ? "Choose a customer or agent for an unpaid balance." : ""
-  const installationError = isSale && installation && !jobTitle.trim() ? "Enter a job title for the installation." : ""
+  const installationError = isSale && installTypes.length>0 && !jobTitle.trim() ? "Enter a job title for the installation." : ""
   function addProduct(product: Product, separate = false) {
     const key = String(++sequence.current)
     setLines(current=>{
@@ -236,22 +238,11 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
     })
   }
   function selectInstallation(product: Product, on: boolean) {
-    setInstallTypes(current=>on ? [...current,product.id] : current.filter(id=>id!==product.id))
     setLines(current=>{
       if (!on) return current.filter(line=>line.productId!==product.id)
       if (current.some(line=>line.productId===product.id) || current.length>=100) return current
       return [...current,{key:String(++sequence.current),name:product.name,productId:product.id,quantity:1}]
     })
-  }
-  // Unticking the job drops the installation lines too, so the invoice and the
-  // job never disagree about what was agreed.
-  function toggleInstallation(on: boolean) {
-    setInstallation(on)
-    if (on) return
-    setInstallTypes([])
-    setJobTitle("")
-    suggestedTitle.current = ""
-    setLines(current=>current.filter(line=>!productMap.get(line.productId)?.installation))
   }
   useEffect(()=>{
     const next = installTypes.map(id=>productMap.get(id)?.name).filter(Boolean).join(" + ")
@@ -279,7 +270,7 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
       action:"sale",...payload,requestId:requestId.current,quoteId:quote?.id,quoteVersion:quote?.version,paid,
       method:v(form,"method") || "Cash",reference:v(form,"reference"),dueDate:opt(form,"dueDate"),
       soldOn: soldOn && soldOn !== data.today ? soldOn : null,
-      installation:canAddInstallation && installation ? { title:jobTitle,location:v(form,"location"),technicianId:opt(form,"technicianId"),scheduled:opt(form,"scheduled"),
+      installation:canAddInstallation && installTypes.length ? { title:jobTitle,location:v(form,"location"),technicianId:opt(form,"technicianId"),scheduled:opt(form,"scheduled"),
         services: installTypes.map(id=>({ productId:id })) } : undefined
     }
     if (needsApproval) {
@@ -312,7 +303,7 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
         <div className="cart-name">
           <div className="sale-line-identity">
             {product && <ProductPhoto product={product} />}
-            <div><strong>{line.name}</strong><small>{[product?.sku,stocked && isSale ? num(product.on_hand)+" "+product.unit+" in stock" : ""].filter(Boolean).join(" · ")}</small></div>
+            <div><strong>{line.name}</strong><small>{[product?.installation ? "Installation service" : "",product?.sku,stocked && isSale ? num(product.on_hand)+" "+product.unit+" in stock" : ""].filter(Boolean).join(" · ")}</small></div>
           </div>
           {isSale && !converting && stocked && line.quantity===1 && <input aria-label={"Serial number for "+line.name} placeholder="Serial (optional)"
             value={line.serial ?? ""} maxLength={100} onChange={event=>update(line.key,{serial:event.target.value})} />}
@@ -392,6 +383,25 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
             min={quote?.valid_until && quote.valid_until < data.today ? quote.valid_until : data.today} /></Field>}
         </div>
 
+        {isSale && canAddInstallation && <div className="checkout-card">
+          <div className="checkout-section-title"><span className="metric-icon green"><Wrench size={19} /></span><h3>Installation</h3></div>
+          <p className="checkout-hint">{requestJobs
+            ? "Choose the installation services this customer needs. The request goes to the installations team, and the prices are added to this sale."
+            : "Choose one or more installation services given to this customer. Each one becomes its own line on the invoice and the receipt."}</p>
+          <InstallationPicker types={installationTypes} selected={installTypes} price={lookupPrice} toggle={selectInstallation} />
+          {installTypes.length>0 && <>
+            <p className="checkout-hint">Saved as an installation job on {(buyer ?? matchedBuyer)?.name || enteredName || "the walk-in customer"}&apos;s profile, together with this sale.</p>
+            <div className="form-grid">
+              <Field label="Job title" hint={installTypes.length ? "Filled from the chosen installation types." : undefined}>
+                <input value={jobTitle} onChange={event=>setJobTitle(event.target.value)} required placeholder="Office network installation" /></Field>
+              <Field label="Installation location"><input name="location" required={requestJobs} /></Field>
+              <Field label={requestJobs ? "Preferred date" : "Scheduled date"}><input name="scheduled" type="date" min={requestJobs ? data.today : undefined} /></Field>
+              {scheduleJobs && <Field label="Technician"><Select name="technicianId"><option value="">Assign later</option><PeopleOptions people={data.staff.filter(staff=>staff.role==="Technician"&&staff.active)} /></Select></Field>}
+            </div>
+            <ErrorLine message={installationError} />
+          </>}
+        </div>}
+
         <div className="checkout-card">
           <div className="checkout-section-title"><span className="metric-icon cyan"><Wallet size={19} /></span><h3>{isSale ? "Order summary" : "Quotation summary"}</h3></div>
           {(!requestApprovals || (isSale && !converting)) && adjustments}
@@ -405,21 +415,6 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
           {needsApproval && <Field label="Reason for approval" hint="The sale will be ready to complete after an administrator approves these terms.">
             <input name="approvalReason" maxLength={160} required placeholder="Why is the discount or balance needed?" />
           </Field>}
-          {isSale && canAddInstallation && <>
-            <label className="checkbox checkout-installation"><input type="checkbox" checked={installation}
-              onChange={event=>toggleInstallation(event.target.checked)} /> {requestJobs ? "Request an installation" : "Create a linked installation job"}</label>
-            {installation && <>
-              <InstallationPicker types={installationTypes} selected={installTypes} price={lookupPrice} toggle={selectInstallation} />
-              <div className="form-grid">
-                <Field label="Job title" hint={installTypes.length ? "Filled from the chosen installation types." : undefined}>
-                  <input value={jobTitle} onChange={event=>setJobTitle(event.target.value)} required placeholder="Office network installation" /></Field>
-                <Field label="Installation location"><input name="location" required={requestJobs} /></Field>
-                <Field label={requestJobs ? "Preferred date" : "Scheduled date"}><input name="scheduled" type="date" min={requestJobs ? data.today : undefined} /></Field>
-                {scheduleJobs && <Field label="Technician"><Select name="technicianId"><option value="">Assign later</option><PeopleOptions people={data.staff.filter(staff=>staff.role==="Technician"&&staff.active)} /></Select></Field>}
-              </div>
-              <ErrorLine message={installationError} />
-            </>}
-          </>}
         </div>
       </section>
     </div>
