@@ -25,7 +25,7 @@ const cart = {
   discount: amount.default(0), tax: amount.default(0)
 }
 const saleInput = z.object({ action: z.literal("sale"), ...cart, requestId: id, quoteId: id.optional(), quoteVersion: z.number().int().positive().optional(), paid: transactionAmount.default(0),
-  method: z.enum(methods), reference: text, dueDate: day.nullable(),
+  method: z.enum(methods), reference: text, dueDate: day.nullable(), soldOn: day.nullable().optional(),
   installation: z.object({ title: name, location: text, technicianId: id.nullable(), scheduled: day.nullable() }).optional() })
 const returnInput = z.object({ action: z.literal("return"), requestId: id, saleId: id, lineId: id, quantity, restock: z.boolean(), reason: name })
 const schema = z.discriminatedUnion("action", [
@@ -153,9 +153,10 @@ async function moveStock(db: Client, user: User, productId: string, delta: numbe
     [productId,kind,delta,reference,user.id])
 }
 
-async function addPayment(db: Client, user: User, saleId: string, requestId: string, paid: number, method: string, reference: string) {
-  if (paid > 0) await db.query("INSERT INTO payments (request_id,sale_id,amount,method,reference,staff_id) VALUES ($1,$2,$3,$4,$5,$6)",
-    [requestId,saleId,paid,method,reference,user.id])
+async function addPayment(db: Client, user: User, saleId: string, requestId: string, paid: number, method: string, reference: string, on: string | null = null) {
+  if (paid > 0) await db.query(`INSERT INTO payments (request_id,sale_id,amount,method,reference,staff_id,created_at) VALUES ($1,$2,$3,$4,$5,$6,
+    CASE WHEN $7::date IS NULL THEN now() ELSE ($7::date + time '12:00') AT TIME ZONE 'Africa/Dar_es_Salaam' END)`,
+    [requestId,saleId,paid,method,reference,user.id,on])
 }
 
 async function checkTech(db: Client, tech: string | null) {
@@ -266,6 +267,12 @@ async function checkout(db: Client, user: User, input: Checkout, options?: { req
     await audit(db,user,edited ? "Quotation updated" : "Quotation created",saved.number)
     return saved
   }
+  const soldOn = input.soldOn ?? null
+  if (soldOn) {
+    const today = required(await first<{ today: string }>(db, "SELECT (now() AT TIME ZONE 'Africa/Dar_es_Salaam')::date::text AS today"), "Could not check today’s date.")
+    if (soldOn > today.today) throw new ShopError("The sale date cannot be in the future.")
+    if (input.dueDate && input.dueDate < soldOn) throw new ShopError("The balance due date cannot be before the sale date.")
+  }
   for (const [productId, count] of totals) {
     const item = byId.get(productId)!
     if (count > item.on_hand) throw new ShopError(`${item.name} has only ${item.on_hand} ${item.unit} available.`,409)
@@ -292,7 +299,7 @@ async function checkout(db: Client, user: User, input: Checkout, options?: { req
       await checkTech(db,input.installation.technicianId)
     }
   }
-  const summary: ApprovalSummary = {buyer:customer.name,total,discount,paid:input.paid,method:input.method,dueDate:input.dueDate,
+  const summary: ApprovalSummary = {buyer:customer.name,total,discount,paid:input.paid,method:input.method,dueDate:input.dueDate,soldOn,
     items:items.map(item=>({name:item.product.name,quantity:item.quantity,price:item.price}))}
   if (options?.request) {
     if (!discount && input.paid===total) throw new ShopError("This sale does not require approval.")
@@ -308,18 +315,19 @@ async function checkout(db: Client, user: User, input: Checkout, options?: { req
   const kind = serviceOnly ? "Service only" : includesService ? "Equipment + installation" : "Equipment"
   const saleId = randomUUID()
   const saved = required(await first(db, `INSERT INTO sales (id,request_id,invoice,customer_id,customer_name,customer_address,customer_phone,
-    cashier_id,kind,subtotal,discount,tax,total,cost,due_date,buyer_type)
-    VALUES ($1,$2,(SELECT invoice_prefix FROM business WHERE id=1)||'-'||nextval('invoice_number'),$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+    cashier_id,kind,subtotal,discount,tax,total,cost,due_date,buyer_type,created_at)
+    VALUES ($1,$2,(SELECT invoice_prefix FROM business WHERE id=1)||'-'||nextval('invoice_number'),$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+      CASE WHEN $16::date IS NULL THEN now() ELSE ($16::date + time '12:00') AT TIME ZONE 'Africa/Dar_es_Salaam' END)
     RETURNING id,number,invoice`, [saleId,input.requestId,customer.id,customer.name,customer.address,customer.phone,user.id,
-    kind,subtotal,discount,tax,total,cost,input.dueDate,customer.buyerType]), "Sale could not be saved.")
+    kind,subtotal,discount,tax,total,cost,input.dueDate,customer.buyerType,soldOn]), "Sale could not be saved.")
   for (const item of items) {
     await db.query(`INSERT INTO sale_items (sale_id,product_id,name,quantity,price,cost,type,serial,unit,warranty_until)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,CASE WHEN $10::integer>0 THEN
-        ((now() AT TIME ZONE 'Africa/Dar_es_Salaam')::date + make_interval(months=>$10::integer))::date END)`,
-      [saleId,item.productId,item.product.name,item.quantity,item.price,item.product.cost,item.product.type,item.serial ?? "",item.product.unit,item.product.warranty])
+        ((COALESCE($11::date,(now() AT TIME ZONE 'Africa/Dar_es_Salaam')::date) + make_interval(months=>$10::integer))::date) END)`,
+      [saleId,item.productId,item.product.name,item.quantity,item.price,item.product.cost,item.product.type,item.serial ?? "",item.product.unit,item.product.warranty,soldOn])
   }
   for (const [productId,count] of totals) await moveStock(db,user,productId,-count,"Sale",saved.number)
-  await addPayment(db,user,saleId,input.requestId,input.paid,input.method,input.reference)
+  await addPayment(db,user,saleId,input.requestId,input.paid,input.method,input.reference,soldOn)
   if (input.installation) {
     const job = input.installation
     await db.query("INSERT INTO installations (title,customer_id,sale_id,technician_id,location,scheduled,status,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",

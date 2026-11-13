@@ -98,6 +98,7 @@ export function ApprovalDetail({ approval, data, open, close, save }: WorkspaceP
       <p>{approval.requester} · {date(approval.created_at)}{summary.saleNumber && " · "+summary.saleNumber}</p></div><Badge value={approval.status} /></div>
     <dl className="details-list">
       <div><dt>Reason</dt><dd className="approval-note">{approval.reason}</dd></div>
+      {!isReturn && summary.soldOn && <div><dt>Sale date</dt><dd>{date(summary.soldOn)}</dd></div>}
       {approval.reviewer && <div><dt>Reviewed by</dt><dd>{approval.reviewer} · {date(approval.reviewed_at)}</dd></div>}
       {approval.review_note && <div><dt>Decision note</dt><dd className="approval-note">{approval.review_note}</dd></div>}
     </dl>

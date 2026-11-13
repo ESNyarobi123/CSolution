@@ -42,7 +42,7 @@ export type SeriesPoint = { day: string; sales: number; collected: number; profi
 export type Breakdown = { name: string; product_id: string | null; sku: string | null; sales: number; units: number; profit: number }
 export type ApprovalSummary = {
   buyer: string; total: number; paid: number; discount: number; method?: typeof methods[number];
-  dueDate?: string | null; saleNumber?: string; refund?: number; credit?: number; restock?: boolean;
+  dueDate?: string | null; soldOn?: string | null; saleNumber?: string; refund?: number; credit?: number; restock?: boolean;
   items: { name: string; quantity: number; price: number }[]
 }
 export type Approval = {

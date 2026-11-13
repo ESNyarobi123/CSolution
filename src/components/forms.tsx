@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react"
 import { Box, CircleDollarSign, CopyPlus, CreditCard, FileText, ImagePlus, Minus, PackageOpen, Plus, ShoppingCart, Trash2, UploadCloud, Wallet } from "lucide-react"
 import { can, roles } from "@/lib/access"
-import { money, num, requestJSON } from "@/lib/format"
+import { date, money, num, requestJSON } from "@/lib/format"
 import { customerTypes, expenseCategories, jobStatuses, methods, productTypes, type BuyerType, type Customer, type Expense, type Group, type Job, type JobDetail, type Line, type Person, type Product, type Purchase, type Quote, type Sale, type SaleDetail, type Snapshot, type Staff } from "@/lib/model"
 import { ErrorLine, Field, Form, numberVal as n, opt, ProductPhoto, Select, val as v } from "./ui"
 import { CheckoutBuyer, buyerNameKey, isBuyerAccount } from "./checkout-buyer"
@@ -138,6 +138,7 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
   const [tax,setTax] = useState(quote?.tax ?? 0)
   const [payment,setPayment] = useState("full")
   const [received,setReceived] = useState<number | null>(null)
+  const [soldOn,setSoldOn] = useState(data.today)
   const [installation,setInstallation] = useState(false)
   const requestId = useRef("")
   const sequence = useRef(lines.length)
@@ -215,6 +216,7 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
     const sale = {
       action:"sale",...payload,requestId:requestId.current,quoteId:quote?.id,quoteVersion:quote?.version,paid,
       method:v(form,"method") || "Cash",reference:v(form,"reference"),dueDate:opt(form,"dueDate"),
+      soldOn: soldOn && soldOn !== data.today ? soldOn : null,
       installation:canAddInstallation && installation ? { title:v(form,"title"),location:v(form,"location"),technicianId:opt(form,"technicianId"),scheduled:opt(form,"scheduled") } : undefined
     }
     if (needsApproval) {
@@ -315,10 +317,13 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
             </label>)}
           </fieldset>
           <div className="form-grid">
+            <Field label="Sale date" hint={soldOn !== data.today ? "Recording a past sale on " + date(soldOn) + "." : "Choose an earlier date to record a past sale."}>
+              <input type="date" value={soldOn} max={data.today} onChange={event=>setSoldOn(event.target.value || data.today)} />
+            </Field>
             {payment!=="credit" && <Field label="Payment method"><Select name="method">{methods.map(method=><option key={method}>{method}</option>)}</Select></Field>}
             {payment==="partial" && <Field label={requestApprovals ? "Proposed payment (TZS)" : "Amount received (TZS)"}><input name="paid" type="number" min="1" max={Math.max(0,total-1)}
               value={received ?? ""} onChange={event=>setReceived(event.target.value==="" ? null : event.target.valueAsNumber)} required /></Field>}
-            {payment!=="full" && <Field label="Balance due date"><input name="dueDate" type="date" min={data.today} /></Field>}
+            {payment!=="full" && <Field label="Balance due date"><input name="dueDate" type="date" min={soldOn} /></Field>}
             {payment!=="credit" && <Field label="Payment reference"><input name="reference" placeholder="Optional" /></Field>}
           </div></> : <Field label="Valid until"><input name="validUntil" type="date" defaultValue={quote?.valid_until ?? ""}
             min={quote?.valid_until && quote.valid_until < data.today ? quote.valid_until : data.today} /></Field>}
