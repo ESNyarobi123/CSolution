@@ -486,6 +486,7 @@ export async function changeShop(raw: unknown, user: User) {
         return required(saved,"Catalog group could not be found.")
       }
       case "product": {
+        let previous: Product | undefined
         if (input.initialStock > 0 && (input.id || input.type !== "Stocked")) {
           throw new ShopError("Opening stock applies when registering a stocked product.")
         }
@@ -499,14 +500,11 @@ export async function changeShop(raw: unknown, user: User) {
           }
         }
         if (input.id) {
-          const current = required(await first<Product>(db,"SELECT * FROM products WHERE id=$1 FOR UPDATE",[input.id]),"Product could not be found.")
-          if (current.active && !input.active && current.on_hand > 0) throw new ShopError("Adjust the remaining stock to zero before archiving this product.",409)
-          if (current.type !== input.type && (current.on_hand > 0 ||
+          previous = required(await first<Product>(db,"SELECT * FROM products WHERE id=$1 FOR UPDATE",[input.id]),"Product could not be found.")
+          if (previous.active && !input.active && previous.on_hand > 0) throw new ShopError("Adjust the remaining stock to zero before archiving this product.",409)
+          if (previous.type !== input.type && (previous.on_hand > 0 ||
               await first(db,"SELECT id FROM stock_movements WHERE product_id=$1 LIMIT 1",[input.id]))) {
             throw new ShopError("This product has stock history. Create a separate product for a different item type.",409)
-          }
-          if (current.type === "Stocked" && current.on_hand > 0 && current.cost !== input.cost) {
-            throw new ShopError("Stock cost is updated by purchases while units are on hand.")
           }
         }
         const values = [input.name,input.sku.toUpperCase(),input.categoryId,input.brandId,input.type,input.unit,input.description,
@@ -517,6 +515,12 @@ export async function changeShop(raw: unknown, user: User) {
           await first(db,`INSERT INTO products (name,sku,category_id,brand_id,type,unit,description,cost,price,agent_price,reorder,warranty,image_url,active)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,values),"Product could not be found.")
         if (!input.id && input.type === "Stocked") await moveStock(db,user,saved.id,input.initialStock,"Opening stock","Initial inventory")
+        if (previous && previous.cost !== input.cost) {
+          const value = (cost: number) => "TZS " + Number(cost).toLocaleString("en-US",{ maximumFractionDigits: 0 })
+          await audit(db,user,"Product cost updated",
+            `${input.sku.toUpperCase()} · ${value(previous.cost ?? 0)} → ${value(input.cost)}` +
+            (previous.type === "Stocked" && previous.on_hand > 0 ? ` · stock value ${previous.on_hand} × ${value(input.cost)}` : ""))
+        }
         await audit(db,user,"Product saved",input.sku.toUpperCase())
         return saved
       }
