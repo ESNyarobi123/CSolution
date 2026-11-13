@@ -109,16 +109,23 @@ const linkedRecordMessage: Record<DeletableRecord, string> = {
 }
 
 async function deleteRecord(db: Client, user: User, record: DeletableRecord, recordId: string) {
-  const label = deletableRecords[record]
   // Table and column names are chosen only from the validated record types.
   const title = record === "quotations" ? "number" : record === "installations" ? "title" : record === "expenses" ? "description" : "name"
-  const columns = record === "products" ? ",sku,on_hand" :
+  const columns = record === "products" ? ",sku,on_hand,installation" :
     record === "quotations" ? ",sale_id" :
     record === "installations" ? ",sale_id,status,completed_at" :
     record === "expenses" ? ",amount,incurred::text,job_id" : ""
   const item = required(await first(db, `SELECT ${title} AS title${columns} FROM ${record} WHERE id=$1 FOR UPDATE`, [recordId]), "Record could not be found.")
+  const label = record === "products" && item.installation ? "installation type" : deletableRecords[record]
   if (record === "products") {
     if (item.on_hand > 0) throw new ShopError("This product still has stock. Adjust its stock before deleting it.",409)
+    if (item.installation) {
+      // A type that already priced a sale or a job must stay for the history;
+      // archiving hides it from new sales without breaking old documents.
+      const used = await first(db,"SELECT id FROM sale_items WHERE product_id=$1 LIMIT 1",[recordId]) ||
+        await first(db,"SELECT id FROM installations WHERE services @> $1::jsonb LIMIT 1",[JSON.stringify([{product_id:recordId}])])
+      if (used) throw new ShopError("This installation type is already on a sale or a job. Archive it instead so past prices stay correct.",409)
+    }
     const quoted = await first(db, "SELECT id FROM quotations WHERE lines @> $1::jsonb LIMIT 1",
       [JSON.stringify([{ productId:recordId }])])
     if (quoted) throw new ShopError("This product is used in a quotation. Archive it to keep the quotation history.",409)

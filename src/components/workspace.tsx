@@ -330,7 +330,8 @@ function WorkspaceModal({ panel, close, open, go, formProps }: {
     }
     case "purchaseReference": return modal("Edit purchase reference",<PurchaseReferenceForm {...formProps} record={panel.record} />,false,panel.record.number)
     case "deleteRecord": {
-      const label = "Delete "+deletableRecords[panel.record]
+      const installationType = panel.record==="products" && data.products.find(product=>product.id===panel.id)?.installation
+      const label = "Delete "+ (installationType ? "installation type" : deletableRecords[panel.record])
       const description = panel.record==="expenses" ?
         "This permanently removes the expense from reports. Its original amount will be recorded in the activity log." :
         "This permanently removes the record. The deletion will appear in the activity log."

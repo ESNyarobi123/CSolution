@@ -34,10 +34,10 @@ function editAction(label: string, run: () => void): MenuAction {
   return { label,icon:Edit3,run }
 }
 
-function deleteActions(data: Snapshot, open: Props["open"], record: DeletableRecord, id: string, title: string): MenuAction[] {
+function deleteActions(data: Snapshot, open: Props["open"], record: DeletableRecord, id: string, title: string, label?: string): MenuAction[] {
   if (!can(data.user.role,"admin")) return []
   return [{
-    label:"Delete "+deletableRecords[record],icon:Trash2,destructive:true,
+    label:"Delete " + (label ?? deletableRecords[record]),icon:Trash2,destructive:true,
     run:()=>open({kind:"deleteRecord",id,record,title})
   }]
 }
@@ -426,7 +426,14 @@ export function Installations({ data,open }: Props) {
         {label:"Price",cell:p=><strong>{money(p.price)}</strong>,numeric:true},
         {label:"Agent price",cell:p=>p.agent_price===null ? "—" : money(p.agent_price),numeric:true},
         {label:"Status",cell:p=><Badge value={p.active?"Active":"Archived"} />},
-        ...(schedules ? [rowActions<Product>(p=>p.name,p=>[editAction("Edit installation type",()=>open({kind:"installationType",record:p}))])] : [])
+        ...(schedules ? [rowActions<Product>(p=>p.name,p=>[
+          editAction("Edit installation type",()=>open({kind:"installationType",record:p})),
+          ...(can(data.user.role,"admin") ? [{
+            label:p.active?"Archive installation type":"Restore installation type",icon:p.active?Archive:ArchiveRestore,
+            run:()=>open({kind:"productStatus",id:p.id,title:p.name,active:!p.active})
+          }] : []),
+          ...deleteActions(data,open,"products",p.id,p.name,"installation type")
+        ])] : [])
       ]} />
     <p className="detail-note">The sales team picks these when they create a sale, so the installation price is added to the invoice automatically.</p>
   </>

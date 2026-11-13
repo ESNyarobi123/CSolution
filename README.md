@@ -34,6 +34,8 @@ Kwa database tupu, nakili `.env.example` kwenda `.env` kwenye mazingira mapya, w
 
 Nenda **Installations → Types & prices** kuongeza aina za installation zenye bei, mfano `Network installation` kwa TZS 80,000 au `Router configuration` kwa TZS 45,000. Kila aina inaweza kuwa na bei ya agent na gharama ya kazi (`labour cost`) inayotumika kupima faida ya huduma hiyo.
 
+Aina ambayo haijatumika kwenye sale wala job inaweza kufutwa kabisa kupitia menyu ya vitendo (`Delete installation type`). Aina iliyokwisha tumika kwenye sale au job haifutwi, kwa sababu bei yake inahitajika kwenye kumbukumbu; tumia `Archive installation type` kuificha kwenye mauzo mapya bila kuvunja nyaraka za zamani.
+
 Kwenye **New sale**, chagua kifaa, kisha weka tiki kwenye installation na uchague aina moja au zaidi. Kila aina uliyochagua inaingia kwenye cart kama line yenye bei yake, hivyo invoice, receipt na ripoti zinahesabu mapato ya installation sawa na bidhaa. Ukiiondoa kwenye orodha, line hiyo inatolewa kwenye cart. Jina la job linajazwa kutoka aina ulizochagua na unaweza kulibadilisha.
 
 Ombi la installation (Front Office) linatumia orodha hiyo hiyo, na job inahifadhi aina zilizokubaliwa pamoja na bei yake. Ukurasa wa **Installations** kwa Admin/Manager unaonyesha aina na bei tu; kazi yenyewe inafuatiliwa kwenye sale iliyounganishwa, wasifu wa mteja na dashboard.
