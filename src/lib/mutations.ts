@@ -348,11 +348,12 @@ async function checkout(db: Client, user: User, input: Checkout, options?: { req
     RETURNING id,number,invoice`, [saleId,input.requestId,customer.id,customer.name,customer.address,customer.phone,user.id,
     kind,subtotal,discount,tax,total,cost,input.dueDate,customer.buyerType,soldOn]), "Sale could not be saved.")
   for (const item of items) {
-    await db.query(`INSERT INTO sale_items (sale_id,product_id,name,quantity,price,cost,type,serial,unit,warranty_until,list_price)
+    await db.query(`INSERT INTO sale_items (sale_id,product_id,name,quantity,price,cost,type,serial,unit,warranty_until,list_price,negotiation_note)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,CASE WHEN $10::integer>0 THEN
         ((COALESCE($11::date,(now() AT TIME ZONE 'Africa/Dar_es_Salaam')::date) + make_interval(months=>$10::integer))::date) END,
-        CASE WHEN $12::numeric IS NOT NULL AND $12::numeric<>$5::numeric THEN $12::numeric END)`,
-      [saleId,item.productId,item.product.name,item.quantity,item.price,item.product.cost,item.product.type,item.serial ?? "",item.product.unit,item.product.warranty,soldOn,item.usual])
+        CASE WHEN $12::numeric<>$5::numeric THEN $12::numeric END,$13)`,
+      [saleId,item.productId,item.product.name,item.quantity,item.price,item.product.cost,item.product.type,item.serial ?? "",item.product.unit,item.product.warranty,
+        soldOn,item.usual,item.price<item.usual ? item.negotiationNote ?? "" : ""])
   }
   for (const [productId,count] of totals) await moveStock(db,user,productId,-count,"Sale",saved.number)
   await addPayment(db,user,saleId,input.requestId,input.paid,input.method,input.reference,soldOn)

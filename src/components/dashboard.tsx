@@ -1,7 +1,7 @@
 "use client"
 
-import { useId, useState } from "react"
-import { ArrowDownRight, ArrowRight, ArrowUpRight, CalendarDays, ChartNoAxesCombined, CheckCircle2, CircleDollarSign, ClipboardCheck, FileClock, Layers3, PackageOpen, RadioTower, ReceiptText, TriangleAlert, Wallet, type LucideIcon } from "lucide-react"
+import { useId, useState, type ReactNode } from "react"
+import { ArrowDownRight, ArrowRight, ArrowUpRight, CalendarDays, ChartNoAxesCombined, CheckCircle2, CircleDollarSign, ClipboardCheck, FileClock, Layers3, PackageOpen, PenLine, RadioTower, ReceiptText, TriangleAlert, Wallet, type LucideIcon } from "lucide-react"
 import { can } from "@/lib/access"
 import { date, dayLabel, initials, money, num, short, shopDay } from "@/lib/format"
 import type { Quote, Sale, SeriesPoint, Snapshot } from "@/lib/model"
@@ -12,20 +12,22 @@ const offsetDay = (day: string, offset: number) =>
   new Date(Date.parse(day)+offset*86400000).toISOString().slice(0,10)
 export const reportStart = (today: string, days: number) => offsetDay(today,1-days)
 
-export function Metric({ label, value, icon: Icon, tone, change, note }: {
-  label: string; value: string; icon: LucideIcon; tone: string; change?: number; note: string
+export function Metric({ label, value, icon: Icon, tone, change, note, href }: {
+  label: string; value: string; icon: LucideIcon; tone: string; change?: number; note: ReactNode; href?: string
 }) {
-  return <article className="metric">
-    <div className="metric-top"><span className={`metric-icon ${tone}`}><Icon size={18} strokeWidth={1.9} /></span><span>{label}</span></div>
+  const Card = href ? "a" : "article"
+  return <Card className="metric" href={href}>
+    <div className="metric-top"><span className={`metric-icon ${tone}`}><Icon size={18} strokeWidth={1.9} /></span><span>{label}</span>
+      {href && <ArrowRight className="metric-arrow" size={14} aria-hidden="true" />}</div>
     <strong>{value}</strong>
     <div className="metric-note">
       {change !== undefined && <span className={`metric-change ${change < 0 ? "decline" : ""}`}>
         {change < 0 ? <ArrowDownRight size={13} /> : change > 0 ? <ArrowUpRight size={13} /> : null}
         {change > 0 ? "+" : change < 0 ? "−" : ""}{Math.abs(change).toFixed(1)}%
       </span>}
-      <span>{note}</span>
+      {typeof note==="string" ? <span>{note}</span> : note}
     </div>
-  </article>
+  </Card>
 }
 
 const chartModes = {
@@ -115,6 +117,7 @@ export function Dashboard({ data, go, openSale, openQuote, openJob }: {
   const { kpi,previous } = data
   const sells = can(data.user.role,"sales")
   const reports = can(data.user.role,"reports")
+  const reviewsApprovals = can(data.user.role,"reviewApprovals")
   const tracksJobs = can(data.user.role,"jobs")
   const low = data.products.filter(product=>product.active && product.type==="Stocked" && product.on_hand<=product.reorder)
     .sort((a,b)=>a.on_hand-b.on_hand)
@@ -129,6 +132,12 @@ export function Dashboard({ data, go, openSale, openQuote, openJob }: {
   const lateJobs = jobs.filter(job=>job.scheduled && job.scheduled<data.today)
   const pendingJobs = can(data.user.role,"scheduleJobs") ? data.jobs.filter(job=>job.status==="Requested") : []
   const pendingApprovals = data.approvals.filter(item=>item.status==="Pending").length
+  const negotiations = data.approvals.filter(approval=>approval.kind==="Sale terms" &&
+    approval.summary.items.some(item=>item.listPrice!==undefined && item.price<item.listPrice))
+  const waitingNegotiations = negotiations.filter(approval=>approval.status==="Pending").length
+  const approvedNegotiations = negotiations.filter(approval=>approval.status==="Approved" || approval.status==="Completed").length
+  const todayResults = data.series.at(-1)
+  const todayExpenses = (todayResults?.overhead ?? 0)+(todayResults?.installationExpenses ?? 0)
   const start = reportStart(data.today,data.days)
   const periodSales = data.sales.filter(sale=>{
     const day = shopDay(sale.created_at)
@@ -145,12 +154,13 @@ export function Dashboard({ data, go, openSale, openQuote, openJob }: {
       </div>
       <div className="overview-banner-actions">
         {reports && <button type="button" onClick={()=>go("analytics")}><ChartNoAxesCombined size={17} /> View reports <ArrowRight size={15} /></button>}
+        {reports && <button type="button" onClick={()=>go("expenses")}><Wallet size={17} /> Company expenses <ArrowRight size={15} /></button>}
         {sells && <button type="button" onClick={()=>go("documents")}><ReceiptText size={17} /> Documents <ArrowRight size={15} /></button>}
         {!sells && <button type="button" onClick={()=>go("products")}><PackageOpen size={17} /> Products <ArrowRight size={15} /></button>}
       </div>
     </section>
 
-    <section className="metric-grid overview-metrics" aria-label="Shop metrics">
+    <section className={`metric-grid overview-metrics ${reports && reviewsApprovals ? "overview-admin-metrics" : ""}`} aria-label="Shop metrics">
       {sells && <Metric label="Sales revenue" value={money(kpi.revenue)} icon={CircleDollarSign} tone="blue"
         change={growth(kpi.revenue,previous.revenue)} note={previous.revenue>0 ? "vs. previous period" : "After returns, excluding tax"} />}
       {sells && <Metric label="Payments collected" value={money(kpi.collected)} icon={Wallet} tone="cyan"
@@ -159,6 +169,11 @@ export function Dashboard({ data, go, openSale, openQuote, openJob }: {
         change={growth(kpi.net,previous.net ?? 0)} note={(previous.net ?? 0)>0 ? "vs. previous period" : "After operating expenses"} />}
       <Metric label={kpi.stockValue===undefined ? "Stocked products" : "Stock value"} value={kpi.stockValue===undefined ? num(kpi.stockCount) : money(kpi.stockValue)}
         icon={Layers3} tone="green" note={kpi.stockValue===undefined ? "Active inventory SKUs" : num(kpi.stockCount)+" active SKUs · at cost"} />
+      {reports && <Metric label="Expenses today" value={money(todayExpenses)} icon={ReceiptText} tone="teal"
+        note="Operating & installation expenses" href="#expenses" />}
+      {reviewsApprovals && <Metric label="Price negotiations" value={num(approvedNegotiations+waitingNegotiations)} icon={PenLine} tone="blue"
+        note={<><span className="metric-change">{num(approvedNegotiations)} approved</span>
+          <span className="metric-change decline">{num(waitingNegotiations)} awaiting approval</span></>} href="#approvals" />}
     </section>
 
     <section className={`dashboard-grid ${sells ? "" : "no-sales"}`}>

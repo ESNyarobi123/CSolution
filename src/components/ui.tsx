@@ -45,13 +45,14 @@ export function Modal({ title, subtitle, close, wide, checkout, children }: {
   useEffect(() => {
     const dialog = modal.current
     dialog?.showModal()
-    if (checkout && matchMedia("(min-width: 851px)").matches) {
+    const initialFocus = dialog?.querySelector<HTMLElement>("[data-dialog-focus]")
+    if (initialFocus) initialFocus.focus({preventScroll:true})
+    else if (checkout && matchMedia("(min-width: 851px)").matches)
       dialog?.querySelector<HTMLInputElement>("[data-checkout-focus]")?.focus({preventScroll:true})
-    }
     return () => dialog?.close()
   }, [checkout])
   return <dialog ref={modal} aria-labelledby={titleId} className={checkout ? "dialog checkout-dialog" : wide ? "dialog wide" : "dialog"}
-    onCancel={event => { event.preventDefault(); close() }} onClick={event => { if (event.target === event.currentTarget) close() }}>
+    onCancel={event => { event.preventDefault(); event.stopPropagation(); close() }} onClick={event => { if (event.target === event.currentTarget) close() }}>
     <div className="dialog-shell">
       <header className="dialog-head">
         <div><h2 id={titleId}>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>

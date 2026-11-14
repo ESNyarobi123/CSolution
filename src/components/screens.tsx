@@ -341,46 +341,56 @@ export function Documents({ data,open,page,go }: Props & { page:string; go:(page
   </div>
 }
 
+const defaultExpenseFilters = { query:"",category:"",scope:"",period:"report",from:"",to:"" }
+
 export function Expenses({ data,open,embedded = false }: Props & { embedded?:boolean }) {
-  const [query,setQuery] = useState("")
-  const [category,setCategory] = useState("")
-  const [scope,setScope] = useState("")
-  const [period,setPeriod] = useState(embedded ? "report" : "all")
-  const days = period==="report" ? data.days : Number(period)
-  const start = days ? new Date(Date.parse(data.today)-(days-1)*86_400_000).toISOString().slice(0,10) : ""
-  const text = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
-  const items = data.expenses.filter(expense=>{
+  const [filters,setFilters] = useState(defaultExpenseFilters)
+  const change = (field: keyof typeof filters, value: string)=>setFilters(current=>({...current,[field]:value}))
+  const { query,category,scope,period,from,to } = filters
+  const invalidDates = period==="custom" && Boolean(from && to && from>to)
+  const start = period==="report" ? reportStart(data.today,data.days) : period==="custom" ? from : ""
+  const end = period==="report" ? data.today : period==="custom" ? to : ""
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  const matches = invalidDates ? [] : data.expenses.filter(expense=>{
     const labels = fields(expense.description,expense.category,expense.reference,expense.notes,expense.job,expense.method).toLowerCase()
-    return (!start || (expense.incurred>=start && expense.incurred<=data.today)) &&
-      (!scope || Boolean(expense.job_id)===(scope==="job")) && (!category || category===expense.category) &&
-      text.every(term=>labels.includes(term))
+    return (!start || expense.incurred>=start) && (!end || expense.incurred<=end) &&
+      (!scope || Boolean(expense.job_id)===(scope==="job")) && terms.every(term=>labels.includes(term))
   })
+  const items = category ? matches.filter(expense=>expense.category===category) : matches
+  const categoryTotals = new Map<string,number>()
+  for (const expense of matches) categoryTotals.set(expense.category,(categoryTotals.get(expense.category) ?? 0)+expense.amount)
+  const byCategory = Array.from(categoryTotals).sort((a,b)=>b[1]-a[1] || a[0].localeCompare(b[0]))
+  const categoryTotal = byCategory.reduce((total,[,amount])=>total+amount,0)
   const amounts = items.reduce((sum,expense)=>{
     if (expense.job_id) sum.jobs+=expense.amount
     else sum.operating+=expense.amount
     return sum
   },{operating:0,jobs:0})
-  return <div className="sales-page">
-    <section className="sales-metrics" aria-label="Totals for matching expenses">
-      <div className="panel sales-metric"><span className="metric-icon blue"><Wallet size={19} /></span><div><small>Total expenses</small><strong>{money(amounts.operating+amounts.jobs)}</strong></div></div>
-      <div className="panel sales-metric"><span className="metric-icon teal"><Store size={19} /></span><div><small>Operating expenses</small><strong>{money(amounts.operating)}</strong></div></div>
-      <div className="panel sales-metric"><span className="metric-icon cyan"><RadioTower size={19} /></span><div><small>Installation expenses</small><strong>{money(amounts.jobs)}</strong></div></div>
-    </section>
-    <article className="panel sales-list">
-      <div className="sales-list-head"><div><h2>Expense records</h2><p aria-live="polite">{num(items.length)} of {num(data.expenses.length)} expenses</p></div></div>
+  const ledger = <article className="panel sales-list expense-list">
+      <div className="sales-list-head">
+        <div><h2>Expense records</h2><p aria-live="polite">{num(items.length)} of {num(data.expenses.length)} expenses</p></div>
+        {(query || category || scope || period!=="report") && <button type="button" className="button secondary small"
+          onClick={()=>setFilters(defaultExpenseFilters)}><RotateCcw size={15} /> Clear filters</button>}
+      </div>
       <div className="sales-filters expense-filters">
-        <SearchBox value={query} change={setQuery} placeholder="Search expense, notes or reference…" />
-        <Select aria-label="Expense category" value={category} onChange={event=>setCategory(event.target.value)}><option value="">All categories</option>{expenseCategories.map(option=><option key={option}>{option}</option>)}</Select>
-        <Select aria-label="Expense scope" value={scope} onChange={event=>setScope(event.target.value)}><option value="">All expenses</option><option value="operating">Operating</option><option value="job">Installation</option></Select>
-        <Select aria-label="Expense period" value={period} onChange={event=>setPeriod(event.target.value)}>
-          {embedded && <option value="report">Report period</option>}
-          <option value="all">All dates</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option>
+        <SearchBox value={query} change={value=>change("query",value)} placeholder="Search reason, notes or reference…" />
+        <Select aria-label="Expense category" value={category} onChange={event=>change("category",event.target.value)}><option value="">All categories</option>{expenseCategories.map(option=><option key={option}>{option}</option>)}</Select>
+        <Select aria-label="Expense type" value={scope} onChange={event=>change("scope",event.target.value)}><option value="">All types</option><option value="operating">Operating</option><option value="job">Installation</option></Select>
+        <Select aria-label="Expense period" value={period} onChange={event=>change("period",event.target.value)}>
+          <option value="report">Report period</option><option value="all">All dates</option><option value="custom">Custom dates</option>
         </Select>
       </div>
-      <Table key={JSON.stringify([query,category,scope,period])} rows={items} empty={data.expenses.length ? "No expenses match these filters" : "No expenses recorded yet"} columns={[
-        {label:"Expense",cell:e=><TextLink run={()=>open({kind:"expenseDetail",record:e})}>{e.description}</TextLink>},
-        {label:"Category",cell:e=>e.category},
-        {label:"Scope",cell:e=>e.job ? e.job : "Operating"},
+      {period==="custom" && <div className="sales-custom-dates expense-custom-dates">
+        <Field label="From"><input type="date" value={from} onChange={event=>change("from",event.target.value)} /></Field>
+        <Field label="To"><input type="date" value={to} onChange={event=>change("to",event.target.value)} /></Field>
+      </div>}
+      {invalidDates && <div className="sales-date-error"><ErrorLine message="The end date must be on or after the start date." /></div>}
+      <Table key={[query,category,scope,period,from,to].join("|")} rows={items} empty={data.expenses.length ? "No expenses match these filters" : "No expenses recorded yet"} columns={[
+        {label:"Expense",cell:e=><div className="expense-record"><span className={`metric-icon ${e.job_id ? "cyan" : "teal"}`}>{e.job_id ? <RadioTower size={16} /> : <ReceiptText size={16} />}</span>
+          <div><TextLink run={()=>open({kind:"expenseDetail",record:e})}>{e.description}</TextLink>
+            <small className="table-sub">{e.job ? "Installation · "+e.job : "Company operating expense"}</small>
+            <small className="table-sub expense-mobile-date">{date(e.incurred)}</small></div></div>},
+        {label:"Category",cell:e=><span className="expense-category">{e.category}</span>},
         {label:"Date",cell:e=>date(e.incurred)},
         {label:"Payment",cell:e=><>{e.method ?? "—"}{e.reference&&<small className="table-sub">{e.reference}</small>}</>},
         {label:"Amount",cell:e=><strong>{money(e.amount)}</strong>,numeric:true},
@@ -389,7 +399,26 @@ export function Expenses({ data,open,embedded = false }: Props & { embedded?:boo
           ...(can(data.user.role,"admin") ? [editAction("Edit expense",()=>open({kind:"expense",record:e})),...deleteActions(data,open,"expenses",e.id,e.description)] : [])
         ])
       ]} />
-    </article>
+  </article>
+  return <div className="sales-page">
+    <section className="sales-metrics expense-metrics" aria-label="Totals for matching expenses">
+      <div className="panel sales-metric"><span className="metric-icon blue"><Wallet size={19} /></span><div><small>Total recorded expenses</small><strong>{money(amounts.operating+amounts.jobs)}</strong></div></div>
+      <div className="panel sales-metric"><span className="metric-icon teal"><Store size={19} /></span><div><small>Operating expenses</small><strong>{money(amounts.operating)}</strong></div></div>
+      <div className="panel sales-metric"><span className="metric-icon cyan"><RadioTower size={19} /></span><div><small>Installation expenses</small><strong>{money(amounts.jobs)}</strong></div></div>
+    </section>
+    {!embedded && <div className="expense-overview">
+      <ProfitStatement data={data} />
+      <article className="panel expense-breakdown">
+        <div className="panel-head"><div><h2>Spending by category</h2><p>Select a category to filter expense records</p></div></div>
+        {byCategory.length ? <ul>{byCategory.map(([name,amount])=><li key={name}>
+          <button type="button" aria-pressed={category===name} onClick={()=>change("category",category===name ? "" : name)}>
+            <span><span>{name}</span><strong>{money(amount)}</strong></span>
+            <span className="expense-category-track" aria-hidden="true"><i style={{width:`${amount/categoryTotal*100}%`}} /></span>
+          </button>
+        </li>)}</ul> : <Empty title="No spending to summarize" icon={ReceiptText} />}
+      </article>
+    </div>}
+    {ledger}
   </div>
 }
 
@@ -539,6 +568,29 @@ const breakdownSort = {
   name: "Name A–Z"
 } as const
 
+function ProfitStatement({ data,viewExpenses }: { data: Snapshot; viewExpenses?: () => void }) {
+  const { revenue,costOfSales = 0,installationMaterials = 0,installationExpenses = 0,overhead = 0,profit = 0,net = 0,collected } = data.kpi
+  const margin = revenue>0 ? (net/revenue*100).toFixed(1)+"%" : "—"
+  const loss = net<0
+  return <article className="panel report-statement">
+    <div className="panel-head"><div><h2>Profit & loss</h2><p>{date(reportStart(data.today,data.days))} – {date(data.today)}</p></div></div>
+    <dl>
+      <div><dt>Sales revenue · after returns, before tax</dt><dd>{money(revenue)}</dd></div>
+      <div><dt>Cost of sold items & services</dt><dd>{money(costOfSales)}</dd></div>
+      <div><dt>Extra installation materials</dt><dd>{money(installationMaterials)}</dd></div>
+      <div><dt>Recorded installation expenses</dt><dd>{money(installationExpenses)}</dd></div>
+      <div className="statement-subtotal"><dt>Gross profit</dt><dd>{money(profit)}</dd></div>
+      <div><dt>Company operating expenses</dt><dd>{money(overhead)}</dd></div>
+      <div className={`statement-net ${loss ? "statement-loss" : ""}`}><dt>{loss ? "Net loss" : "Net profit"}</dt><dd>{money(net)}</dd></div>
+    </dl>
+    <div className="statement-footer">
+      <span>Net margin <strong>{margin}</strong></span>
+      <span>Payments collected <strong>{money(collected)}</strong></span>
+      {viewExpenses && <button type="button" className="text-button" onClick={viewExpenses}>View expenses <ChevronRight size={14} /></button>}
+    </div>
+  </article>
+}
+
 export function Analytics({ data,open }: Props) {
   const [tab,setTab] = useState<string>("Products")
   const [mode,setMode] = useState("Performance")
@@ -553,7 +605,6 @@ export function Analytics({ data,open }: Props) {
   const profit = kpi.profit ?? 0
   const overhead = kpi.overhead ?? 0
   const net = kpi.net ?? 0
-  const margin = kpi.revenue>0 ? (net/kpi.revenue*100).toFixed(1)+"%" : "—"
   const filePrefix = "CSolution-"+start+"-to-"+data.today
   const hasSku = key==="products"
 
@@ -565,8 +616,10 @@ export function Analytics({ data,open }: Props) {
 
   function exportDaily() {
     downloadReport(filePrefix+"-daily",
-      ["Date","Revenue (TZS)","Payments collected (TZS)","Gross profit (TZS)","Operating expenses (TZS)","Net profit (TZS)"],
-      data.series.map(point=>[point.day,point.sales,point.collected,point.profit ?? 0,point.overhead ?? 0,point.net ?? 0]))
+      ["Date","Revenue (TZS)","Payments collected (TZS)","Cost of sales (TZS)","Extra installation materials (TZS)",
+        "Installation expenses (TZS)","Gross profit (TZS)","Operating expenses (TZS)","Net profit (TZS)"],
+      data.series.map(point=>[point.day,point.sales,point.collected,point.costOfSales ?? 0,point.installationMaterials ?? 0,
+        point.installationExpenses ?? 0,point.profit ?? 0,point.overhead ?? 0,point.net ?? 0]))
   }
 
   return <div className="analytics-page">
@@ -586,17 +639,7 @@ export function Analytics({ data,open }: Props) {
     {mode==="Performance" ? <div className="stack">
       <div className="analytics-grid">
         <RevenueChart points={data.series} days={data.days} />
-        <article className="panel report-statement">
-          <div className="panel-head"><div><h2>Profit & loss</h2><p>{reportDates}</p></div></div>
-          <dl>
-            <div><dt>Sales revenue</dt><dd>{money(kpi.revenue)}</dd></div>
-            <div><dt>Direct costs</dt><dd>{money(kpi.revenue-profit)}</dd></div>
-            <div className="statement-subtotal"><dt>Gross profit</dt><dd>{money(profit)}</dd></div>
-            <div><dt>Operating expenses</dt><dd>{money(overhead)}</dd></div>
-            <div className="statement-net"><dt>Net profit</dt><dd>{money(net)}</dd></div>
-          </dl>
-          <div className="statement-footer"><span>Net margin <strong>{margin}</strong></span><button type="button" className="text-button" onClick={()=>setMode("Expenses")}>View expenses <ChevronRight size={14} /></button></div>
-        </article>
+        <ProfitStatement data={data} viewExpenses={()=>setMode("Expenses")} />
       </div>
       <article className="panel">
         <div className="panel-head"><div><h2>Sales breakdown</h2><p>{reportDates}</p></div>

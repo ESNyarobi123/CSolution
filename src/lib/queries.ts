@@ -36,23 +36,26 @@ const dailyResults = `WITH dates AS (
   SELECT generate_series(${localDay}-($1::int*2-1),${localDay},interval '1 day')::date AS day
 ), entries AS (
   SELECT (created_at AT TIME ZONE 'Africa/Dar_es_Salaam')::date AS day,
-    total-tax AS revenue, total-tax-cost AS profit, 1 AS sale_count, 0 AS overhead, 0 AS collected FROM sales
+    total-tax AS revenue, cost AS cost_of_sales, 0 AS installation_materials, 0 AS installation_expenses,
+    1 AS sale_count, 0 AS overhead, 0 AS collected FROM sales
     WHERE ($2::uuid IS NULL OR cashier_id=$2)
   UNION ALL
   SELECT (r.created_at AT TIME ZONE 'Africa/Dar_es_Salaam')::date,-r.credit+r.tax_credit,
-    -r.credit+r.tax_credit+CASE WHEN r.restock THEN l.cost*r.quantity ELSE 0 END,0,0,-r.refund
+    CASE WHEN r.restock THEN -l.cost*r.quantity ELSE 0 END,0,0,0,0,-r.refund
   FROM returns r JOIN sale_items l ON l.id=r.sale_item_id JOIN sales s ON s.id=l.sale_id
     WHERE ($2::uuid IS NULL OR s.cashier_id=$2)
   UNION ALL
-  SELECT incurred,0,CASE WHEN job_id IS NOT NULL THEN -amount ELSE 0 END,0,CASE WHEN job_id IS NULL THEN amount ELSE 0 END,0
+  SELECT incurred,0,0,0,CASE WHEN job_id IS NOT NULL THEN amount ELSE 0 END,0,CASE WHEN job_id IS NULL THEN amount ELSE 0 END,0
     FROM expenses WHERE $2::uuid IS NULL
   UNION ALL
-  SELECT (created_at AT TIME ZONE 'Africa/Dar_es_Salaam')::date,0,-quantity*cost,0,0,0 FROM installation_items WHERE $2::uuid IS NULL
+  SELECT (created_at AT TIME ZONE 'Africa/Dar_es_Salaam')::date,0,0,quantity*cost,0,0,0,0 FROM installation_items WHERE $2::uuid IS NULL
   UNION ALL
-  SELECT (p.created_at AT TIME ZONE 'Africa/Dar_es_Salaam')::date,0,0,0,0,p.amount
+  SELECT (p.created_at AT TIME ZONE 'Africa/Dar_es_Salaam')::date,0,0,0,0,0,0,p.amount
     FROM payments p JOIN sales s ON s.id=p.sale_id WHERE ($2::uuid IS NULL OR s.cashier_id=$2)
 )
-SELECT dates.day::text,COALESCE(sum(revenue),0) AS sales,COALESCE(sum(profit),0) AS profit,
+SELECT dates.day::text,COALESCE(sum(revenue),0) AS sales,COALESCE(sum(revenue-cost_of_sales-installation_materials-installation_expenses),0) AS profit,
+  COALESCE(sum(cost_of_sales),0) AS "costOfSales",COALESCE(sum(installation_materials),0) AS "installationMaterials",
+  COALESCE(sum(installation_expenses),0) AS "installationExpenses",
   COALESCE(sum(sale_count),0) AS sale_count, COALESCE(sum(overhead),0) AS overhead, COALESCE(sum(collected),0) AS collected
 FROM dates LEFT JOIN entries ON dates.day=entries.day GROUP BY dates.day ORDER BY dates.day`
 
@@ -163,19 +166,23 @@ export async function getSnapshot(user: User, days = 7): Promise<Snapshot> {
   ])
   const aggregate = (data: typeof daily) => data.reduce((a, p) => ({
     revenue: a.revenue + p.sales, profit: a.profit + p.profit, net: a.net + p.profit - p.overhead,
+    costOfSales: a.costOfSales + p.costOfSales, installationMaterials: a.installationMaterials + p.installationMaterials,
+    installationExpenses: a.installationExpenses + p.installationExpenses,
     overhead: a.overhead + p.overhead, collected: a.collected + p.collected, saleCount: a.saleCount + p.sale_count
-  }), { revenue: 0, profit: 0, net: 0, overhead: 0, collected: 0, saleCount: 0 })
+  }), { revenue: 0, profit: 0, net: 0, costOfSales: 0, installationMaterials: 0, installationExpenses: 0, overhead: 0, collected: 0, saleCount: 0 })
   const current = daily.slice(days)
   const total = aggregate(current)
   const prior = aggregate(daily.slice(0, days))
   return {
     user, business: business!, today: date!.today, days, updatedAt: new Date().toISOString(),
     kpi: { revenue: total.revenue, collected: total.collected, saleCount: total.saleCount, stockCount: stock!.skus,
-      ...(financials ? { profit: total.profit, net: total.net, overhead: total.overhead, stockValue: stock!.value } : {}),
+      ...(financials ? { profit: total.profit, net: total.net, overhead: total.overhead, costOfSales: total.costOfSales,
+        installationMaterials: total.installationMaterials, installationExpenses: total.installationExpenses, stockValue: stock!.value } : {}),
       ...(sells ? { outstanding: balance?.value ?? 0 } : {}) },
     previous: { revenue: prior.revenue, collected: prior.collected, ...(financials ? { profit: prior.profit, net: prior.net } : {}) },
     series: current.map(p => ({ day: p.day, sales: p.sales, collected: p.collected,
-      ...(financials ? { profit: p.profit, net: p.profit-p.overhead, overhead: p.overhead } : {}) })),
+      ...(financials ? { profit: p.profit, net: p.profit-p.overhead, overhead: p.overhead, costOfSales: p.costOfSales,
+        installationMaterials: p.installationMaterials, installationExpenses: p.installationExpenses } : {}) })),
     products, categories, brands, customers, suppliers, purchases, movements, serials, sales, quotes, jobs, staff, expenses, audit, approvals, breakdown: report
   }
 }
@@ -189,7 +196,7 @@ export async function getSale(id: string, user: User): Promise<SaleDetail | unde
   }
   const [lines, payments, returned] = await Promise.all([
     rows<SaleDetail["lines"][number]>(pool, `SELECT l.id,l.product_id,l.name,p.sku,l.unit,l.quantity,l.price,l.list_price,l.type,l.serial,l.warranty_until::text,
-      ${can(user.role, "reports") ? "l.cost," : ""}COALESCE(sum(r.quantity),0) AS returned
+      ${can(user.role, "reports") ? "l.cost," : ""}${can(user.role, "pricing") ? "l.negotiation_note," : ""}COALESCE(sum(r.quantity),0) AS returned
       FROM sale_items l JOIN products p ON p.id=l.product_id LEFT JOIN returns r ON r.sale_item_id=l.id
       WHERE l.sale_id=$1 GROUP BY l.id,p.id ORDER BY l.id`, [id]),
     rows<SaleDetail["payments"][number]>(pool, "SELECT id,method,amount,reference,created_at FROM payments WHERE sale_id=$1 ORDER BY created_at", [id]),

@@ -31,7 +31,7 @@ const sections: NavigationGroup[] = [
   { name:"OPERATIONS", links:[
     { id:"installations",title:"Installations",heading:"Installations",sub:"Set the installation types and prices charged on sales.",icon:RadioTower,permission:"viewJobs" },
     { id:"approvals",title:"Approvals",heading:"Approvals",sub:"Review requests for discounts, credit and returns.",icon:ClipboardCheck,permission:"viewApprovals" },
-    { id:"expenses",title:"Expenses",heading:"Expenses",sub:"Record operating costs and expenses linked to installation jobs.",icon:CircleDollarSign,permission:"reports" },
+    { id:"expenses",title:"Company expenses",heading:"Company expenses",sub:"Record company spending and see how it affects profit.",icon:Wallet,permission:"reports" },
     { id:"analytics",title:"Analytics & reports",heading:"Analytics & reports",sub:"Measure revenue, costs and profitability across the shop.",icon:ChartNoAxesCombined,permission:"reports" },
     { id:"settings",title:"Settings",heading:"Settings",sub:"Manage the business profile, staff accounts and backups.",icon:Settings2,permission:"admin" }
   ]}
@@ -88,7 +88,7 @@ export function Workspace({ initial }: { initial: Snapshot }) {
   const available = navigationFor(data.user.role)
   const active = available.flatMap(group=>group.links).find(link=>link.id===page.split("/")[0]) ?? available[0].links[0]
   const activePage = active.id
-  const reportPage = activePage==="overview" || activePage==="analytics" || activePage==="approvals"
+  const reportPage = ["overview","analytics","approvals","expenses"].includes(activePage)
   const frontOffice = ownSalesOnly(data.user.role)
   const sells = can(data.user.role,"sales")
   const canSeeInventory = can(data.user.role,"inventory")
@@ -202,7 +202,7 @@ export function Workspace({ initial }: { initial: Snapshot }) {
     payments:<Sales {...screenProps} balancesOnly />, approvals:<Approvals {...screenProps} />,
     analytics:<Analytics {...screenProps} />, expenses:<Expenses {...screenProps} />, settings:<Settings {...screenProps} initialStaff={page==="settings/staff"} />
   }
-  const showPeriod = !frontOffice&&sells&&(activePage==="overview"||activePage==="analytics"||(activePage==="products"&&can(data.user.role,"reports")))
+  const showPeriod = !frontOffice&&sells&&(["overview","analytics","expenses"].includes(activePage)||(activePage==="products"&&can(data.user.role,"reports")))
   const from = reportStart(data.today,data.days)
   const updatedTime = new Intl.DateTimeFormat("en-GB",{hour:"2-digit",minute:"2-digit",second:"2-digit",timeZone:"Africa/Dar_es_Salaam"}).format(new Date(data.updatedAt))
   return <>
@@ -439,8 +439,9 @@ function SaleView({ detail,data,open }: { detail:SaleDetail;data:Snapshot;open:(
     </div>
     <div className="detail-block"><h3>Items</h3><Table rows={detail.lines} columns={[
       {label:"Item",cell:l=><><strong>{l.name}</strong><small className="table-sub">{l.serial ? "S/N "+l.serial : l.sku}{l.returned>0 ? " · "+l.returned+" returned" : ""}</small>{l.warranty_until && <small className="table-sub">Warranty until {date(l.warranty_until)}</small>}</>},
-      {label:"Quantity",cell:l=>num(l.quantity)+" "+l.unit},{label:"Unit price",cell:l=><>{money(l.price)}{showNegotiation && l.list_price!==null && l.list_price!==undefined && l.list_price!==l.price &&
-        <small className="table-sub">Negotiated · was {money(l.list_price)}</small>}</>,numeric:true},
+      {label:"Quantity",cell:l=>num(l.quantity)+" "+l.unit},{label:"Unit price",cell:l=><>{money(l.price)}{showNegotiation && l.list_price!=null && l.list_price!==l.price &&
+        <small className="table-sub">{l.price<l.list_price ? "Negotiated" : "Adjusted"} · List {money(l.list_price)}</small>}
+        {showNegotiation && l.negotiation_note && <small className="table-sub">{l.negotiation_note}</small>}</>,numeric:true},
       ...(can(data.user.role,"reports")?[{label:"Unit cost",cell:(l:SaleDetail["lines"][number])=>money(l.cost??0),numeric:true}]:[]),
       {label:"Total",cell:l=><strong>{money(l.price*l.quantity)}</strong>,numeric:true}
     ]} /></div>

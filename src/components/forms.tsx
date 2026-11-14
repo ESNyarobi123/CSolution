@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { Box, CircleDollarSign, CopyPlus, CreditCard, FileText, ImagePlus, Minus, PackageOpen, PenLine, Plus, ShoppingCart, Trash2, UploadCloud, Wallet, Wrench } from "lucide-react"
+import { Box, Check, CircleDollarSign, ClipboardCheck, CopyPlus, CreditCard, FileText, ImagePlus, Minus, PackageOpen, PenLine, Plus, ReceiptText, ShoppingCart, Trash2, UploadCloud, Wallet, Wrench } from "lucide-react"
 import { can, roles } from "@/lib/access"
 import { date, money, num, requestJSON } from "@/lib/format"
 import { customerTypes, expenseCategories, jobStatuses, methods, productTypes, type BuyerType, type Customer, type Expense, type Group, type Job, type JobDetail, type Line, type Person, type Product, type Purchase, type Quote, type Sale, type SaleDetail, type Snapshot, type Staff } from "@/lib/model"
@@ -143,42 +143,42 @@ function InstallationPicker({ types, selected, price, toggle }: {
   </fieldset>
 }
 
-function NegotiationPopup({ line, shelf, current, apply, close }: {
-  line: string; shelf: number; current: number; apply: (price: number, note: string) => void; close: () => void
+function NegotiationPopup({ line, shelf, current, requiresApproval, apply, close }: {
+  line: Line & { name: string }; shelf: number; current: number; requiresApproval: boolean;
+  apply: (price?: number, note?: string) => void; close: () => void
 }) {
-  const [price,setPrice] = useState(current ? String(current) : "")
-  const [note,setNote] = useState("")
-  const [error,setError] = useState("")
+  const [price,setPrice] = useState(current<shelf ? String(current) : "")
+  const [note,setNote] = useState(line.negotiationNote ?? "")
   const agreed = Number(price)
-  const valid = Number.isFinite(agreed) && agreed > 0
-  const reduction = valid ? Math.max(0, shelf - agreed) : 0
-  function applyNow() {
-    if (!valid) { setError("Enter the price the customer agreed to pay."); return }
-    if (agreed > shelf) { setError("The agreed price cannot be higher than the shelf price."); return }
-    if (agreed === shelf) { setError("Change the price to make a negotiation request."); return }
-    if (!note.trim()) { setError("Write why the customer asked for a lower price."); return }
-    apply(agreed,note.trim())
-  }
-  return <Modal title="Negotiate the price" subtitle={line} close={close}>
-    <div className="negotiate" onKeyDown={event=>{ if (event.key==="Enter") { event.preventDefault(); applyNow() } }}>
-      <div className="negotiate-summary">
-        <div><small>Shelf price</small><strong>{money(shelf)}</strong></div>
-        <div><small>Agreed price</small><strong>{money(valid ? agreed : 0)}</strong></div>
-        <div><small>Reduction</small><strong className={reduction>0 ? "negotiate-gain" : ""}>{money(reduction)}</strong></div>
-      </div>
-      <Field label="Agreed price per unit (TZS)" hint="The price on the invoice and the receipt will be this one. It is never shown as a discount.">
-        <input type="number" min="1" max={shelf} inputMode="numeric" value={price} onChange={event=>{setPrice(event.target.value);setError("")}} autoFocus />
+  const minimum = requiresApproval ? 1 : 0
+  const valid = price!=="" && Number.isInteger(agreed) && agreed>=minimum && agreed<shelf
+  const reduction = shelf - agreed
+  return <Modal title="Negotiate price" subtitle={line.name} close={close}>
+    <form className="negotiate" onSubmit={event=>{
+      event.preventDefault()
+      if (valid && (!requiresApproval || note.trim())) apply(agreed,note.trim())
+    }}>
+      <dl className="negotiate-summary">
+        <div><dt>List price / unit</dt><dd>{money(shelf)}</dd></div>
+        <div><dt>Savings / unit</dt><dd>{valid ? money(reduction) : "—"}</dd></div>
+        <div><dt>New line total</dt><dd>{valid ? money(agreed*line.quantity) : "—"}</dd></div>
+      </dl>
+      <Field label="Agreed price per unit (TZS)" hint={`Enter a whole amount from ${money(minimum)} to ${money(shelf-1)}.`}>
+        <input type="number" min={minimum} max={shelf-1} inputMode="numeric" value={price} placeholder="Enter agreed price"
+          onChange={event=>setPrice(event.target.value)} required data-dialog-focus />
       </Field>
-      <Field label="Why did the customer ask for this price?" hint="Management reads this before approving. The customer never sees it.">
-        <textarea rows={3} maxLength={300} value={note} onChange={event=>{setNote(event.target.value);setError("")}} placeholder="Buying several units, long-standing customer, competitor price…" />
+      <Field label={requiresApproval ? "Reason for the lower price" : "Negotiation note (optional)"}>
+        <textarea rows={3} maxLength={300} value={note} required={requiresApproval} onChange={event=>setNote(event.target.value)}
+          placeholder="e.g. Customer is buying several units" />
       </Field>
-      <ErrorLine message={error} />
-      <p className="checkout-hint">This price needs management approval, so the sale is saved as a request first.</p>
+      <p className="negotiate-notice">{requiresApproval ? <ClipboardCheck size={17} /> : <ReceiptText size={17} />}
+        {requiresApproval ? "Admin approval is required before this sale can be completed." : "The invoice and receipt will show the agreed unit price."}</p>
       <div className="negotiate-actions">
+        {line.price!==undefined && current!==shelf && <button type="button" className="text-button" onClick={()=>apply()}>Restore list price</button>}
         <button type="button" className="button secondary" onClick={close}>Cancel</button>
-        <button type="button" className="button primary" onClick={applyNow}>Use this price</button>
+        <button className="button primary" disabled={!valid || (requiresApproval && !note.trim())}><Check size={16} /> Apply price</button>
       </div>
-    </div>
+    </form>
   </Modal>
 }
 
@@ -212,7 +212,7 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
   const [jobTitle,setJobTitle] = useState("")
   const suggestedTitle = useRef("")
   const requestId = useRef("")
-  const [negotiating,setNegotiating] = useState<{ key: string; name: string; shelf: number } | null>(null)
+  const [negotiating,setNegotiating] = useState<string | null>(null)
   const sequence = useRef(lines.length)
   const cartHeading = useRef<HTMLHeadingElement>(null)
   const isSale = mode === "sale"
@@ -223,14 +223,14 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
   const scheduleJobs = can(data.user.role,"scheduleJobs")
   const canAddInstallation = requestJobs || scheduleJobs
   const buyer = data.customers.find(c=>c.id===customerId)
-  const lookupPrice = (product?: Product) => product ? (buyerType==="Agent" ? product.agent_price ?? product.price : product.price) : 0
+  const lookupPrice = (product?: Product, type = buyerType) => product ? (type==="Agent" ? product.agent_price ?? product.price : product.price) : 0
   const priceForLine = (line: Line) => line.price ?? lookupPrice(productMap.get(line.productId))
   const subtotal = lines.reduce((sum,line)=>sum+line.quantity*priceForLine(line),0)
   const total = subtotal - discount + tax
   const paid = payment==="full" ? total : payment==="partial" ? received ?? 0 : 0
   const negotiated = lines.filter(line=>line.listPrice!==undefined && priceForLine(line)!==line.listPrice)
   const negotiationSummary = negotiated.map(line=>`${line.name} ${money(line.listPrice!)}→${money(priceForLine(line))}${line.negotiationNote ? " ("+line.negotiationNote+")" : ""}`).join("; ").slice(0,160)
-  const canNegotiate = isSale && !converting && !editPrice && requestApprovals
+  const canNegotiate = isSale && !converting && (editPrice || requestApprovals)
   const needsApproval = isSale && requestApprovals && (discount>0 || paid<total || negotiated.length>0)
   const update = (key: string, patch: Partial<Line>)=>setLines(current=>current.map(line=>line.key===key ? {...line,...patch} : line))
   const products = data.products.filter(product=>product.active && (isSale ? !product.installation : true))
@@ -290,11 +290,10 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
   // Apply the price the customer negotiated. The shelf price stays on the line
   // so management can see the reduction afterwards, while the invoice and the
   // receipt only ever use the agreed price.
-  function applyNegotiation(price: number, note: string) {
-    if (!negotiating) return
-    const { key, shelf } = negotiating
+  function applyNegotiation(price?: number, note?: string) {
+    if (!negotiating || !negotiationTarget) return
+    update(negotiating,{price,listPrice:price===undefined ? undefined : negotiationListPrice,negotiationNote:note || undefined})
     setNegotiating(null)
-    update(key,price<shelf ? {price,listPrice:shelf,negotiationNote:note} : {price:undefined,listPrice:undefined,negotiationNote:undefined})
   }
   useEffect(()=>{
     const next = installTypes.map(id=>productMap.get(id)?.name).filter(Boolean).join(" + ")
@@ -333,7 +332,13 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
   }
   const customerField = converting ? <p className="checkout-hint">{buyerType} · {quote?.customer_name}</p> :
     <CheckoutBuyer type={buyerType} name={buyerName} account={buyer ?? matchedBuyer} ambiguousName={ambiguousName} customers={data.customers}
-      onType={type=>{setBuyerType(type);setCustomer("");setBuyerName("")}}
+      onType={type=>{
+        if (type!==buyerType) setLines(current=>current.map(line=>{
+          if (line.listPrice===undefined || line.listPrice===lookupPrice(productMap.get(line.productId),type)) return line
+          return {...line,price:undefined,listPrice:undefined,negotiationNote:undefined}
+        }))
+        setBuyerType(type);setCustomer("");setBuyerName("")
+      }}
       onName={name=>{setBuyerName(name);setCustomer("")}}
       onSelect={customer=>{setBuyerName(customer.name);setCustomer(customer.id)}} />
   const adjustments = <div className="form-grid">
@@ -373,12 +378,13 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
         </div>
         <Field label="Unit price (TZS)" hint={line.listPrice!==undefined && price!==line.listPrice ? "Negotiated · shelf price "+money(line.listPrice) : undefined}>
           <input aria-label={"Unit price for "+line.name} type="number" min="0" max="9999999999" required value={price}
-            readOnly={!editPrice} onChange={event=>update(line.key,{price:event.target.valueAsNumber || 0})} /></Field>
+            readOnly={!editPrice} onChange={event=>update(line.key,
+              {price:event.target.valueAsNumber || 0,listPrice:undefined,negotiationNote:undefined})} /></Field>
         <strong className="line-total">{money(line.quantity*price)}</strong>
         {!converting && <div className="sale-line-actions">
-          {canNegotiate && <button className="icon-btn" type="button"
-            aria-label={"Negotiate price for "+line.name} title="Ask management to approve a lower price"
-            onClick={()=>setNegotiating({key:line.key,name:line.name,shelf:lookupPrice(product)})}><PenLine size={15} /></button>}
+          {canNegotiate && lookupPrice(product)>(requestApprovals ? 1 : 0) && <button className="icon-btn negotiate-trigger" type="button"
+            aria-label={"Negotiate price for "+line.name} title="Negotiate price" aria-haspopup="dialog"
+            onClick={()=>setNegotiating(line.key)}><PenLine size={15} /></button>}
           {product && <button className="icon-btn" type="button" disabled={!canAddUnit || lines.length>=100}
             aria-label={"Add a separate line for "+line.name} title="Add a separate line for another price or serial number"
             onClick={()=>addProduct(product,true)}><CopyPlus size={15} /></button>}
@@ -389,9 +395,10 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
     })}
   </div>
 
-  const negotiationTarget = negotiating ? lines.find(line=>line.key===negotiating.key) : undefined
+  const negotiationTarget = negotiating ? lines.find(line=>line.key===negotiating) : undefined
+  const negotiationListPrice = negotiationTarget ? lookupPrice(productMap.get(negotiationTarget.productId)) : 0
   const submitLabel = needsApproval ? "Request approval" : isSale ? "Complete sale" : quote ? "Save quotation" : "Create quotation"
-  return <Form close={close} onSave={submit} label={submitLabel} busyLabel={isSale ? "Recording sale…" : "Saving quotation…"}
+  return <><Form close={close} onSave={submit} label={submitLabel} busyLabel={isSale ? "Recording sale…" : "Saving quotation…"}
     submitDisabled={!lines.length || Boolean(stockError || discountError || customerError || installationError)}
     footerSummary={<><small>{isSale ? "Sale total" : "Quotation total"}</small><strong>{money(total)}</strong>
       {isSale && payment!=="full"&&<span>Balance {money(Math.max(0,total-paid))}</span>}</>}>
@@ -476,8 +483,10 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
         </div>
       </section>
     </div>
-    {negotiating && negotiationTarget && <NegotiationPopup line={negotiating.name} shelf={negotiating.shelf} current={priceForLine(negotiationTarget)} apply={applyNegotiation} close={()=>setNegotiating(null)} />}
   </Form>
+    {negotiationTarget && <NegotiationPopup line={negotiationTarget} shelf={negotiationListPrice} current={priceForLine(negotiationTarget)}
+      requiresApproval={requestApprovals} apply={applyNegotiation} close={()=>setNegotiating(null)} />}
+  </>
 }
 
 export function StockForm({ data, product, close, save }: FormProps & { product?: Product }) {
@@ -617,20 +626,37 @@ export function MaterialForm({ data, detail, close, save }: FormProps & { detail
 }
 
 export function ExpenseForm({ data, job, record, close, save }: FormProps & { job?: Job; record?: Expense }) {
+  const [scope,setScope] = useState(record?.job_id || job ? "job" : "operating")
   return <Form close={close} label={record ? "Save expense" : "Record expense"} onSave={f=>save({action:"expense",id:record?.id,description:v(f,"description"),
     amount:n(f,"amount"),incurred:v(f,"incurred"),jobId:opt(f,"jobId"),category:v(f,"category"),method:opt(f,"method"),reference:v(f,"reference"),notes:v(f,"notes")},record ? "Expense updated" : "Expense recorded")}>
-    <Field label="Description"><input name="description" defaultValue={record?.description} required maxLength={160} /></Field>
-    <div className="form-grid">
-      <Field label="Amount (TZS)"><input name="amount" type="number" min="1" max="9999999999" defaultValue={record?.amount} required /></Field>
-      <Field label="Date incurred"><input name="incurred" type="date" defaultValue={record?.incurred ?? data.today} required /></Field>
-    </div>
-    <div className="form-grid">
-      <Field label="Category"><Select name="category" defaultValue={record?.category ?? "Other"}>{expenseCategories.map(category=><option key={category}>{category}</option>)}</Select></Field>
-      <Field label="Payment method"><Select name="method" defaultValue={record?.method ?? ""}><option value="">Unspecified</option>{methods.map(method=><option key={method}>{method}</option>)}</Select></Field>
-      <Field label="Related installation"><Select name="jobId" defaultValue={record?.job_id ?? job?.id ?? ""}><option value="">General operating expense</option>{data.jobs.map(j=><option key={j.id} value={j.id}>{j.number} · {j.title}</option>)}</Select></Field>
-      <Field label="Receipt or payment reference"><input name="reference" defaultValue={record?.reference} maxLength={160} placeholder="Optional" /></Field>
-    </div>
-    <Field label="Notes"><textarea name="notes" rows={3} maxLength={2000} defaultValue={record?.notes} placeholder="Optional" /></Field>
+    <section className="expense-form-section" aria-label="Expense details">
+      <div className="expense-amount-fields">
+        <span className="metric-icon teal"><Wallet size={20} /></span>
+        <Field label="Amount (TZS)"><input name="amount" type="number" min="1" max="9999999999" inputMode="numeric"
+          defaultValue={record?.amount} placeholder="0" required data-dialog-focus /></Field>
+        <Field label="Date incurred"><input name="incurred" type="date" defaultValue={record?.incurred ?? data.today} required /></Field>
+      </div>
+      <Field label="What was the expense for?"><input name="description" defaultValue={record?.description}
+        placeholder="e.g. Fuel for customer deliveries" required maxLength={160} /></Field>
+      <div className="form-grid">
+        <Field label="Category"><Select name="category" defaultValue={record?.category ?? "Other"}>{expenseCategories.map(category=><option key={category}>{category}</option>)}</Select></Field>
+        <Field label="Expense type"><Select value={scope} onChange={event=>setScope(event.target.value)}>
+          <option value="operating">Company operating expense</option>
+          <option value="job" disabled={!data.jobs.length}>Installation expense</option>
+        </Select></Field>
+      </div>
+      {scope==="job" && <Field label="Related installation"><Select name="jobId" defaultValue={record?.job_id ?? job?.id ?? ""} required>
+        <option value="">Select an installation…</option>{data.jobs.map(j=><option key={j.id} value={j.id}>{j.number} · {j.title}</option>)}
+      </Select></Field>}
+    </section>
+    <section className="expense-form-section" aria-label="Payment and notes">
+      <h3><ReceiptText size={16} /> Payment and notes</h3>
+      <div className="form-grid">
+        <Field label="Payment method"><Select name="method" defaultValue={record?.method ?? ""}><option value="">Unspecified</option>{methods.map(method=><option key={method}>{method}</option>)}</Select></Field>
+        <Field label="Receipt or payment reference"><input name="reference" defaultValue={record?.reference} maxLength={160} placeholder="Optional" /></Field>
+      </div>
+      <Field label="Additional notes"><textarea name="notes" rows={3} maxLength={2000} defaultValue={record?.notes} placeholder="Optional" /></Field>
+    </section>
   </Form>
 }
 

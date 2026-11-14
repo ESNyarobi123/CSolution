@@ -31,7 +31,7 @@ export type Sale = {
 export type Line = { productId: string; quantity: number; price?: number; serial?: string; listPrice?: number; negotiationNote?: string }
 export type SaleLine = {
   id: string; product_id: string; name: string; sku: string; unit: string; quantity: number; price: number; list_price?: number | null;
-  cost?: number; type: string; serial: string; warranty_until: string | null; returned: number
+  cost?: number; negotiation_note?: string; type: string; serial: string; warranty_until: string | null; returned: number
 }
 export type SaleDetail = { sale: Sale; lines: SaleLine[]; payments: { id: string; method: string; amount: number; reference: string; created_at: string }[]; returns: { id: string; product: string; quantity: number; credit: number; refund: number; reason: string; created_at: string }[] }
 export type Quote = { id: string; version: number; number: string; customer_id: string | null; customer_name: string; buyer_type: BuyerType; lines: (Line & { name: string; price: number })[]; discount: number; tax: number; total: number; valid_until: string | null; sale_id: string | null; created_at: string }
@@ -40,7 +40,8 @@ export type Job = { id: string; number: string; title: string; customer_id: stri
 export type JobDetail = { job: Job; materials: { id: string; name: string; quantity: number; serial: string; cost?: number; from_sale: boolean }[]; expenses: Expense[] }
 export type Expense = { id: string; description: string; amount: number; job_id: string | null; job: string | null; incurred: string; category: typeof expenseCategories[number]; method: typeof methods[number] | null; reference: string; notes: string }
 export type Staff = { id: string; name: string; email: string; role: Role; active: boolean }
-export type SeriesPoint = { day: string; sales: number; collected: number; profit?: number; net?: number; overhead?: number }
+type ReportCosts = { costOfSales: number; installationMaterials: number; installationExpenses: number; overhead: number }
+export type SeriesPoint = { day: string; sales: number; collected: number; profit?: number; net?: number } & Partial<ReportCosts>
 export type Breakdown = { name: string; product_id: string | null; sku: string | null; sales: number; units: number; profit: number }
 export type ApprovalSummary = {
   buyer: string; total: number; paid: number; discount: number; method?: typeof methods[number];
@@ -54,7 +55,7 @@ export type Approval = {
 }
 export type Snapshot = {
   user: User; business: Business; today: string; days: number; updatedAt: string;
-  kpi: { revenue: number; collected: number; profit?: number; net?: number; overhead?: number; stockValue?: number; stockCount: number; outstanding?: number; saleCount: number };
+  kpi: { revenue: number; collected: number; profit?: number; net?: number; stockValue?: number; stockCount: number; outstanding?: number; saleCount: number } & Partial<ReportCosts>;
   previous: { revenue: number; collected: number; profit?: number; net?: number };
   series: SeriesPoint[]; categories: Group[]; brands: Group[]; products: Product[]; customers: Customer[];
   suppliers: Person[]; purchases: Purchase[]; movements: StockMovement[]; serials: SerialRecord[]; sales: Sale[]; quotes: Quote[];
