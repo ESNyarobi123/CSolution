@@ -13,8 +13,12 @@ import { Badge, Field, Form, Select, Table, val } from "./ui"
 type WorkspaceProps = { data: Snapshot; open: (panel: Panel) => void }
 
 export function FrontOfficeDashboard({ data,open,go }: WorkspaceProps & { go: (page: string) => void }) {
-  const todaySales = data.sales.filter(sale=>shopDay(sale.created_at)===data.today)
-  const todayCollected = data.series.at(-1)?.collected ?? 0
+  const { from,to } = data.reportRange
+  const isToday = from===data.today && to===data.today
+  const periodSales = data.sales.filter(sale=>{
+    const day = shopDay(sale.created_at)
+    return day>=from && day<=to
+  })
   const openBalances = data.sales.filter(sale=>sale.balance>0)
   const waiting = data.approvals.filter(approval=>approval.status==="Pending")
   const ready = data.approvals.filter(approval=>approval.status==="Approved")
@@ -28,15 +32,15 @@ export function FrontOfficeDashboard({ data,open,go }: WorkspaceProps & { go: (p
   ]
   return <div className="stack">
     <section className="front-desk-banner">
-      <div><span><Clock3 size={14} /> {date(data.today)}</span><h2>{data.business.name}</h2></div>
-      <button type="button" className="button front-desk-approval" onClick={()=>go("approvals")}>
+      <div><span><Clock3 size={14} /> {date(from)}{from!==to && " – "+date(to)}</span><h2>{data.business.name}</h2></div>
+      <button type="button" className="button front-desk-approval" onClick={()=>go(ready.length ? "approvals/approved" : "approvals")}>
         <ClipboardCheck size={17} /> {ready.length ? num(ready.length)+" ready to complete" : num(waiting.length)+" pending approvals"} <ArrowRight size={15} />
       </button>
     </section>
     <section className="metric-grid overview-metrics" aria-label="My front office metrics">
-      <Metric label="My sales today" value={money(todaySales.reduce((sum,sale)=>sum+sale.total-sale.credits,0))}
-        icon={CreditCard} tone="blue" note={num(todaySales.length)+(todaySales.length===1 ? " sale today" : " sales today")} />
-      <Metric label="My collections today" value={money(todayCollected)} icon={Wallet} tone="teal" note="Payments on my invoices less refunds" />
+      <Metric label={isToday ? "My sales today" : "My sales"} value={money(periodSales.reduce((sum,sale)=>sum+sale.total-sale.credits,0))}
+        icon={CreditCard} tone="blue" note={`${num(periodSales.length)} ${periodSales.length===1 ? "sale" : "sales"} · after returns`} />
+      <Metric label={isToday ? "My collections today" : "My collections"} value={money(data.kpi.collected)} icon={Wallet} tone="teal" note="Payments on my invoices less refunds" />
       <Metric label="My open balances" value={money(openBalances.reduce((sum,sale)=>sum+sale.balance,0))} icon={ReceiptText} tone="cyan"
         note={num(openBalances.length)+(openBalances.length===1 ? " invoice to follow up" : " invoices to follow up")} />
     </section>
@@ -47,9 +51,9 @@ export function FrontOfficeDashboard({ data,open,go }: WorkspaceProps & { go: (p
       </button>)}</div>
     </section>
     <article className="panel">
-      <div className="panel-head"><div><h2>My recent sales</h2><p>Open a sale for its invoice, receipt or payment history.</p></div>
+      <div className="panel-head"><div><h2>My recent sales</h2><p>Latest transactions in the selected period</p></div>
         <button className="button secondary small" type="button" onClick={()=>go("sales")}>My sales <ArrowRight size={15} /></button></div>
-      <Table rows={data.sales.slice(0,5)} empty="Your sales will appear here" columns={[
+      <Table rows={periodSales.slice(0,5)} empty="No sales in this period" columns={[
         {label:"Sale",cell:sale=><button className="text-button" type="button" onClick={()=>open({kind:"saleDetail",id:sale.id})}>{sale.number}</button>},
         {label:"Buyer",cell:sale=>sale.customer_name},{label:"Date",cell:sale=>date(sale.created_at)},
         {label:"Total",cell:sale=>money(sale.total-sale.credits),numeric:true},{label:"Status",cell:sale=><Badge value={sale.status} />}
@@ -60,9 +64,9 @@ export function FrontOfficeDashboard({ data,open,go }: WorkspaceProps & { go: (p
 
 const approvalFilters = ["All","Pending","Approved","Completed","Rejected"] as const
 
-export function Approvals({ data,open }: WorkspaceProps) {
+export function Approvals({ data,open,approvedOnly }: WorkspaceProps & { approvedOnly: boolean }) {
   const admin = can(data.user.role,"reviewApprovals")
-  const [filter,setFilter] = useState<typeof approvalFilters[number]>(admin ? "Pending" : "All")
+  const [filter,setFilter] = useState<typeof approvalFilters[number]>(approvedOnly ? "Approved" : admin ? "Pending" : "All")
   const visible = filter==="All" ? data.approvals : data.approvals.filter(item=>item.status===filter)
   return <article className="panel">
     <div className="panel-head"><div><h2>{admin ? "Approval queue" : "My approval requests"}</h2>
@@ -80,7 +84,7 @@ export function Approvals({ data,open }: WorkspaceProps) {
       {label:"Amount",cell:approval=>money(approval.summary.refund ?? approval.summary.total),numeric:true},
       {label:"Status",cell:approval=><Badge value={approval.status} />},
       {label:"Action",cell:approval=><button type="button" className="button secondary small" onClick={()=>open({kind:"approvalDetail",id:approval.id})}>
-        {admin && approval.status==="Pending" ? "Review" : !admin && approval.status==="Approved" ? "Complete sale" : "View details"}
+        {admin && approval.status==="Pending" ? "Review" : approval.status==="Approved" ? "Complete sale" : "View details"}
       </button>}
     ]} />
   </article>
@@ -93,12 +97,16 @@ export function ApprovalDetail({ approval, data, open, close, save }: WorkspaceP
   const admin = can(data.user.role,"reviewApprovals")
   const isReturn = approval.kind==="Return"
   const { summary } = approval
+  const recordSale = decision==="record"
+  const saleDate = summary.soldOn ?? shopDay(approval.created_at)
+  const confirmPayment = summary.paid>0 && <label className="checkbox"><input type="checkbox" required />
+    Confirm that {money(summary.paid)} was received by {summary.method}.</label>
   const detail = <div className="stack approval-detail">
     <div className="record-title"><div><h3>{summary.buyer}</h3>
       <p>{approval.requester} · {date(approval.created_at)}{summary.saleNumber && " · "+summary.saleNumber}</p></div><Badge value={approval.status} /></div>
     <dl className="details-list">
       <div><dt>Reason</dt><dd className="approval-note">{approval.reason}</dd></div>
-      {!isReturn && summary.soldOn && <div><dt>Sale date</dt><dd>{date(summary.soldOn)}</dd></div>}
+      {!isReturn && <div><dt>Sale date</dt><dd>{date(saleDate)}</dd></div>}
       {approval.reviewer && <div><dt>Reviewed by</dt><dd>{approval.reviewer} · {date(approval.reviewed_at)}</dd></div>}
       {approval.review_note && <div><dt>Decision note</dt><dd className="approval-note">{approval.review_note}</dd></div>}
     </dl>
@@ -129,20 +137,27 @@ export function ApprovalDetail({ approval, data, open, close, save }: WorkspaceP
   </div>
   if (admin && approval.status==="Pending") {
     return <Form close={close} submitDisabled={!decision}
-      label={decision==="reject" ? "Reject request" : isReturn ? "Approve and record return" : "Approve terms"}
-      onSave={form=>save({action:"reviewApproval",id:approval.id,decision,note:val(form,"note")},decision==="reject" ? "Request rejected" : "Request approved")}>
+      label={decision==="reject" ? "Reject request" : isReturn ? "Approve and record return" : recordSale ? "Approve and record sale" : "Approve terms"}
+      onSave={form=>save({action:"reviewApproval",id:approval.id,decision:recordSale ? "approve" : decision,recordSale,note:val(form,"note")},
+        decision==="reject" ? "Request rejected" : recordSale ? "Sale approved and recorded" : isReturn ? "Return recorded" : "Terms approved · sale awaiting completion")}>
       {detail}
       <Field label="Decision"><Select value={decision} required onChange={event=>setDecision(event.target.value)}>
-        <option value="">Choose a decision</option><option value="approve">Approve</option><option value="reject">Reject</option>
+        <option value="">Choose a decision</option>
+        {isReturn ? <option value="approve">Approve and record return</option> : <>
+          <option value="record">Approve and record sale</option><option value="approve">Approve terms only</option>
+        </>}
+        <option value="reject">Reject</option>
       </Select></Field>
       <Field label="Decision note"><textarea name="note" rows={2} maxLength={2000} required={decision==="reject"} /></Field>
       {decision==="approve" && isReturn && <p className="checkout-hint">Approval records the return, any refund and the selected stock adjustment.</p>}
+      {decision==="approve" && !isReturn && <p className="checkout-hint">The sale appears in reports once Admin or Front Office completes it.</p>}
+      {recordSale && confirmPayment}
     </Form>
   }
-  if (!admin && approval.status==="Approved") {
+  if (!isReturn && approval.status==="Approved") {
     return <Form close={close} label="Complete approved sale" onSave={()=>save({action:"completeApprovedSale",id:approval.id},"Approved sale completed")}>
       {detail}
-      {summary.paid>0 && <label className="checkbox"><input type="checkbox" required /> I received {money(summary.paid)} by {summary.method}.</label>}
+      {confirmPayment}
     </Form>
   }
   return <div className="stack">{detail}

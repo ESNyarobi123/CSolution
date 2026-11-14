@@ -6,12 +6,13 @@ import { can, ownSalesOnly, type Capability, type Role } from "@/lib/access"
 import { deletableRecords } from "@/lib/management"
 import { date, initials, money, num, RequestError, requestJSON } from "@/lib/format"
 import type { JobDetail, SaleDetail, Snapshot } from "@/lib/model"
-import { Dashboard, reportStart } from "./dashboard"
+import { maxReportDays, rangeDays, type ReportPeriod } from "@/lib/report-period"
+import { Dashboard } from "./dashboard"
 import { QuoteDocument, SaleDocument } from "./documents"
 import { CartForm, ContactForm, ExpenseForm, GroupForm, InstallationRequestForm, InstallationTypeForm, JobForm, JobStatusForm, MaterialForm, PaymentForm, ProductForm, PurchaseForm, PurchaseReferenceForm, ReturnForm, SettingsForm, StaffForm, StockForm, type Save } from "./forms"
 import { ApprovalDetail, Approvals, FrontOfficeDashboard } from "./front-office"
 import { Analytics, CustomerDetail, Customers, Documents, Expenses, Groups, Installations, Inventory, ProductDetail, Products, Sales, Settings, Suppliers, type Panel } from "./screens"
-import { ActionMenu, Badge, Brand, Empty, ErrorLine, Form, Modal, SearchBox, Select, Table } from "./ui"
+import { ActionMenu, Badge, Brand, Empty, ErrorLine, Field, Form, Modal, SearchBox, Select, Table } from "./ui"
 
 type NavigationGroup = { name: string; links: { id:string; title:string; heading:string; sub:string; icon:LucideIcon; permission?:Capability }[] }
 const sections: NavigationGroup[] = [
@@ -82,6 +83,8 @@ export function Workspace({ initial }: { initial: Snapshot }) {
   const [notice,setNotice] = useState("")
   const [error,setError] = useState("")
   const [updating,setUpdating] = useState(false)
+  const [period,setPeriod] = useState<ReportPeriod>({preset:"today"})
+  const [customDates,setCustomDates] = useState<Snapshot["reportRange"] | null>(null)
   const generation = useRef(0)
   const autoPending = useRef(false)
   const windowNotice = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -114,6 +117,10 @@ export function Workspace({ initial }: { initial: Snapshot }) {
   },[reportPage,panel,data.updatedAt])
 
   useEffect(()=>{
+    if (activePage==="overview" || activePage==="approvals") autoRefresh()
+  },[activePage])
+
+  useEffect(()=>{
     const read = ()=>{ setPage(location.hash.slice(1) || "overview"); setMobile(false) }
     read()
     window.addEventListener("hashchange",read)
@@ -138,15 +145,26 @@ export function Workspace({ initial }: { initial: Snapshot }) {
     if(windowNotice.current) clearTimeout(windowNotice.current)
     windowNotice.current = setTimeout(()=>setNotice(""),4000)
   }
-  async function refresh(days = data.days) {
+  async function refresh(nextPeriod = period) {
     const run = ++generation.current
-    const next = await requestJSON<Snapshot>("/api/shop?days="+days,{cache:"no-store"})
-    if (generation.current===run) setData(next)
+    const params = new URLSearchParams({period:nextPeriod.preset})
+    if (nextPeriod.preset==="custom") {
+      params.set("from",nextPeriod.from)
+      params.set("to",nextPeriod.to)
+    }
+    const next = await requestJSON<Snapshot>("/api/shop?"+params,{cache:"no-store"})
+    if (generation.current===run) {
+      setData(next)
+      setPeriod(nextPeriod)
+    }
     return next
   }
-  async function changePeriod(days:number) {
+  async function changePeriod(nextPeriod = period) {
     setError("");setUpdating(true)
-    try { await refresh(days) }
+    try {
+      await refresh(nextPeriod)
+      setCustomDates(null)
+    }
     catch (e) { setError(e instanceof Error ? e.message : "Could not update date range.") }
     finally { setUpdating(false) }
   }
@@ -159,7 +177,7 @@ export function Workspace({ initial }: { initial: Snapshot }) {
   }
   const save: Save = async (body,message="Changes saved")=>{
     const {action} = body as { action?: string }
-    let result: { id?:string; number?:string; refund?:number }
+    let result: Awaited<ReturnType<Save>>
     try {
       result = await requestJSON("/api/shop",{
         method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)
@@ -176,6 +194,7 @@ export function Workspace({ initial }: { initial: Snapshot }) {
     }
     setPanel(current=>{
       if (!current || current!==panel) return current
+      if (action==="reviewApproval" && result.saleId) return {kind:"saleDetail",id:result.saleId}
       if (action==="completeApprovedSale" && result.id) return {kind:"saleDetail",id:result.id}
       if (current.kind==="sale" && result.id) return {kind:"saleDetail",id:result.id}
       if (current.kind==="quote") {
@@ -199,11 +218,11 @@ export function Workspace({ initial }: { initial: Snapshot }) {
     products:<Products {...screenProps} />, categories:<Groups {...screenProps} kind="categories" />, brands:<Groups {...screenProps} kind="brands" />,
     inventory:<Inventory {...screenProps} initialLow={page==="inventory/low-stock"} />, sales:<Sales {...screenProps} />, documents:<Documents {...screenProps} page={page} go={go} />,
     customers:<Customers {...screenProps} />, installations:<Installations {...screenProps} />, suppliers:<Suppliers {...screenProps} />,
-    payments:<Sales {...screenProps} balancesOnly />, approvals:<Approvals {...screenProps} />,
+    payments:<Sales {...screenProps} balancesOnly />, approvals:<Approvals {...screenProps} approvedOnly={page==="approvals/approved"} />,
     analytics:<Analytics {...screenProps} />, expenses:<Expenses {...screenProps} />, settings:<Settings {...screenProps} initialStaff={page==="settings/staff"} />
   }
-  const showPeriod = !frontOffice&&sells&&(["overview","analytics","expenses"].includes(activePage)||(activePage==="products"&&can(data.user.role,"reports")))
-  const from = reportStart(data.today,data.days)
+  const showPeriod = sells && (activePage==="overview" || (can(data.user.role,"reports") && ["analytics","expenses","products"].includes(activePage)))
+  const invalidRange = customDates && (customDates.from>customDates.to || rangeDays(customDates)>maxReportDays || customDates.to>data.today)
   const updatedTime = new Intl.DateTimeFormat("en-GB",{hour:"2-digit",minute:"2-digit",second:"2-digit",timeZone:"Africa/Dar_es_Salaam"}).format(new Date(data.updatedAt))
   return <>
     <div className="app-shell">
@@ -249,19 +268,39 @@ export function Workspace({ initial }: { initial: Snapshot }) {
             <div><div className="page-context"><span /> {data.user.demo ? "DEMO WORKSPACE" : "MAIN STORE"}</div>
               <h1>{active.heading}</h1><p>{active.sub}</p></div>
             {(reportPage||showPeriod||["sales","documents","expenses"].includes(activePage))&&<div className="heading-actions">
-              {showPeriod&&<div className="period-picker" title={date(from)+" – "+date(data.today)}><CalendarDays size={17} />
-                <Select aria-label="Date range" value={data.days} disabled={updating} onChange={e=>void changePeriod(Number(e.target.value))}>
-                  <option value={7}>Last 7 days</option><option value={14}>Last 14 days</option><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option>
-                </Select></div>}
+              {showPeriod&&<div className="period-picker" title={date(data.reportRange.from)+" – "+date(data.reportRange.to)}><CalendarDays size={17} />
+                <Select aria-label="Date range" value={customDates ? "custom" : period.preset} disabled={updating} onChange={event=>{
+                  const preset = event.target.value as ReportPeriod["preset"]
+                  if (preset==="custom") setCustomDates(data.reportRange)
+                  else void changePeriod({preset})
+                }}>
+                  <option value="today">Today</option><option value="week">This week</option><option value="month">This month</option>
+                  <option value="custom">Custom dates</option>
+                  <optgroup label="Rolling periods"><option value="7">Last 7 days</option><option value="14">Last 14 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></optgroup>
+                </Select>
+                {period.preset==="custom" && !customDates && <button type="button" className="text-button period-edit" onClick={()=>setCustomDates(data.reportRange)}>Edit dates</button>}
+              </div>}
               {sells&&((activePage==="overview"&&!frontOffice)||activePage==="sales")&&<button className="button primary" onClick={()=>open({kind:"sale"})}><Plus size={19} /> New sale</button>}
               {activePage==="documents"&&<button className="button primary" onClick={()=>open({kind:"quote"})}><Plus size={19} /> New quotation</button>}
               {(activePage==="expenses"||activePage==="analytics")&&<button className="button primary" onClick={()=>open({kind:"expense"})}><Plus size={19} /> Record expense</button>}
             </div>}
           </div>
           <ErrorLine message={error} />
+          {showPeriod && customDates && <form className="panel custom-report-period" onSubmit={event=>{
+            event.preventDefault()
+            if (!invalidRange) void changePeriod({preset:"custom",...customDates})
+          }}>
+            <Field label="From"><input type="date" min="0002-01-01" max={data.today} value={customDates.from} required
+              onChange={event=>setCustomDates({...customDates,from:event.target.value})} /></Field>
+            <Field label="To"><input type="date" min="0002-01-01" max={data.today} value={customDates.to} required
+              onChange={event=>setCustomDates({...customDates,to:event.target.value})} /></Field>
+            <button type="submit" className="button primary" disabled={updating || Boolean(invalidRange)}>Apply dates</button>
+            <button type="button" className="button secondary" disabled={updating} onClick={()=>setCustomDates(null)}>Cancel</button>
+            {invalidRange && <div className="custom-report-error"><ErrorLine message={`Choose a date range in order, ending today or earlier, up to ${maxReportDays} days.`} /></div>}
+          </form>}
           {reportPage&&<div className="report-refresh">
             <span><i />Auto refresh · 1 min</span><time dateTime={data.updatedAt}>Updated {updatedTime}</time>
-            <button className="text-button" type="button" disabled={updating} onClick={()=>void changePeriod(data.days)}><RefreshCw size={13} /> {updating ? "Updating…" : "Refresh now"}</button>
+            <button className="text-button" type="button" disabled={updating} onClick={()=>void changePeriod()}><RefreshCw size={13} /> {updating ? "Updating…" : "Refresh now"}</button>
           </div>}
           <div className="page-body" key={page}>{screens[activePage as keyof typeof screens]}</div>
           <footer className="main-footer"><span>CSolution · {data.business.name}</span><span>Dar es Salaam time · TZS</span></footer>

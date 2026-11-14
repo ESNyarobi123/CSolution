@@ -9,7 +9,7 @@ import { ErrorLine, Field, Form, Modal, numberVal as n, opt, ProductPhoto, Selec
 import { CheckoutBuyer, buyerNameKey, isBuyerAccount } from "./checkout-buyer"
 import { SaleCatalog } from "./sale-catalog"
 
-export type Save = (data: object, message?: string) => Promise<{ id?: string; number?: string; refund?: number }>
+export type Save = (data: object, message?: string) => Promise<{ id?: string; saleId?: string; number?: string; refund?: number }>
 type FormProps = { data: Snapshot; close: () => void; save: Save }
 type SimpleProps = Pick<FormProps,"close"|"save">
 const blank = <option value="">Select…</option>

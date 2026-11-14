@@ -5,12 +5,10 @@ import { ArrowDownRight, ArrowRight, ArrowUpRight, CalendarDays, ChartNoAxesComb
 import { can } from "@/lib/access"
 import { date, dayLabel, initials, money, num, short, shopDay } from "@/lib/format"
 import type { Quote, Sale, SeriesPoint, Snapshot } from "@/lib/model"
+import { offsetDay } from "@/lib/report-period"
 import { Badge, Empty, Select, Table } from "./ui"
 
 export const growth = (value: number, prior: number) => prior > 0 ? (value-prior)/prior*100 : undefined
-const offsetDay = (day: string, offset: number) =>
-  new Date(Date.parse(day)+offset*86400000).toISOString().slice(0,10)
-export const reportStart = (today: string, days: number) => offsetDay(today,1-days)
 
 export function Metric({ label, value, icon: Icon, tone, change, note, href }: {
   label: string; value: string; icon: LucideIcon; tone: string; change?: number; note: ReactNode; href?: string
@@ -37,7 +35,7 @@ const chartModes = {
 } as const
 type ChartMode = keyof typeof chartModes
 
-export function RevenueChart({ points, days }: { points: SeriesPoint[]; days: number }) {
+export function RevenueChart({ points }: { points: SeriesPoint[] }) {
   const chartId = useId()
   const [mode,setMode] = useState<ChartMode>("sales")
   const [selected,setSelected] = useState<string | null>(null)
@@ -54,7 +52,7 @@ export function RevenueChart({ points, days }: { points: SeriesPoint[]; days: nu
   const max = Math.ceil(top/tickStep)*tickStep || (bottom<0 ? 0 : tickStep*4)
   const ticks = Array.from({length:Math.round((max-min)/tickStep)+1},(_,i)=>max-i*tickStep)
   const y = (amount: number) => 165*(max-amount)/(max-min)+9
-  const x = (n: number) => 16+768*n/Math.max(points.length-1,1)
+  const x = (n: number) => points.length===1 ? 400 : 16+768*n/Math.max(points.length-1,1)
   const coords = (field: ChartMode | "profit") => points.map((point,n)=>`${x(n)},${y(point[field] ?? 0)}`).join(" ")
   const area = points.length ? `${x(0)},${y(0)} ${coords(mode)} ${x(points.length-1)},${y(0)}` : ""
   const marks = Array.from({length:Math.min(points.length,5)},(_,i)=>Math.round(i*(points.length-1)/Math.max(Math.min(points.length,5)-1,1)))
@@ -107,7 +105,7 @@ export function RevenueChart({ points, days }: { points: SeriesPoint[]; days: nu
           <div className="chart-dates" aria-hidden="true">{marks.map(i=><span key={i}>{dayLabel(points[i].day)}</span>)}</div>
         </div>
       </div>
-    </> : <Empty title={`No data for the last ${days} days`} icon={ChartNoAxesCombined} />}
+    </> : <Empty title="No data for this period" icon={ChartNoAxesCombined} />}
   </article>
 }
 
@@ -132,23 +130,24 @@ export function Dashboard({ data, go, openSale, openQuote, openJob }: {
   const lateJobs = jobs.filter(job=>job.scheduled && job.scheduled<data.today)
   const pendingJobs = can(data.user.role,"scheduleJobs") ? data.jobs.filter(job=>job.status==="Requested") : []
   const pendingApprovals = data.approvals.filter(item=>item.status==="Pending").length
+  const approvedSales = data.approvals.filter(item=>item.kind==="Sale terms" && item.status==="Approved").length
   const negotiations = data.approvals.filter(approval=>approval.kind==="Sale terms" &&
     approval.summary.items.some(item=>item.listPrice!==undefined && item.price<item.listPrice))
   const waitingNegotiations = negotiations.filter(approval=>approval.status==="Pending").length
   const approvedNegotiations = negotiations.filter(approval=>approval.status==="Approved" || approval.status==="Completed").length
-  const todayResults = data.series.at(-1)
-  const todayExpenses = (todayResults?.overhead ?? 0)+(todayResults?.installationExpenses ?? 0)
-  const start = reportStart(data.today,data.days)
+  const { from,to } = data.reportRange
+  const isToday = from===data.today && to===data.today
+  const expenses = (kpi.overhead ?? 0)+(kpi.installationExpenses ?? 0)
   const periodSales = data.sales.filter(sale=>{
     const day = shopDay(sale.created_at)
-    return day>=start && day<=data.today
+    return day>=from && day<=to
   })
   const inventoryPage = can(data.user.role,"inventory") ? "inventory/low-stock" : "products"
   return <div className="dashboard">
     <section className="overview-banner" aria-label="Shop overview">
       <div className="rings" aria-hidden="true"><i /><i /><i /></div>
       <div className="overview-banner-copy">
-        <span className="overview-banner-date"><CalendarDays size={15} />{date(start)} – {date(data.today)}</span>
+        <span className="overview-banner-date"><CalendarDays size={15} />{date(from)}{from!==to && " – "+date(to)}</span>
         <h2>{data.business.name}</h2>
         <p>{sells ? `${num(kpi.saleCount)} ${kpi.saleCount===1 ? "sale" : "sales"} in this period` : `${num(kpi.stockCount)} active stocked products`}</p>
       </div>
@@ -161,15 +160,15 @@ export function Dashboard({ data, go, openSale, openQuote, openJob }: {
     </section>
 
     <section className={`metric-grid overview-metrics ${reports && reviewsApprovals ? "overview-admin-metrics" : ""}`} aria-label="Shop metrics">
-      {sells && <Metric label="Sales revenue" value={money(kpi.revenue)} icon={CircleDollarSign} tone="blue"
+      {sells && <Metric label={isToday ? "Sales revenue today" : "Sales revenue"} value={money(kpi.revenue)} icon={CircleDollarSign} tone="blue"
         change={growth(kpi.revenue,previous.revenue)} note={previous.revenue>0 ? "vs. previous period" : "After returns, excluding tax"} />}
-      {sells && <Metric label="Payments collected" value={money(kpi.collected)} icon={Wallet} tone="cyan"
+      {sells && <Metric label={isToday ? "Collections today" : "Payments collected"} value={money(kpi.collected)} icon={Wallet} tone="cyan"
         change={growth(kpi.collected,previous.collected)} note={previous.collected>0 ? "vs. previous period" : "Payments less refunds"} />}
       {kpi.net!==undefined && <Metric label="Net profit" value={money(kpi.net)} icon={ChartNoAxesCombined} tone="teal"
         change={growth(kpi.net,previous.net ?? 0)} note={(previous.net ?? 0)>0 ? "vs. previous period" : "After operating expenses"} />}
       <Metric label={kpi.stockValue===undefined ? "Stocked products" : "Stock value"} value={kpi.stockValue===undefined ? num(kpi.stockCount) : money(kpi.stockValue)}
         icon={Layers3} tone="green" note={kpi.stockValue===undefined ? "Active inventory SKUs" : num(kpi.stockCount)+" active SKUs · at cost"} />
-      {reports && <Metric label="Expenses today" value={money(todayExpenses)} icon={ReceiptText} tone="teal"
+      {reports && <Metric label={isToday ? "Expenses today" : "Recorded expenses"} value={money(expenses)} icon={ReceiptText} tone="teal"
         note="Operating & installation expenses" href="#expenses" />}
       {reviewsApprovals && <Metric label="Price negotiations" value={num(approvedNegotiations+waitingNegotiations)} icon={PenLine} tone="blue"
         note={<><span className="metric-change">{num(approvedNegotiations)} approved</span>
@@ -177,12 +176,14 @@ export function Dashboard({ data, go, openSale, openQuote, openJob }: {
     </section>
 
     <section className={`dashboard-grid ${sells ? "" : "no-sales"}`}>
-      {sells && <RevenueChart points={data.series} days={data.days} />}
+      {sells && <RevenueChart points={data.series} />}
       <article className="panel overview-attention">
         <div className="panel-head"><div><h2>Needs attention</h2><p>Current alerts across the shop</p></div><span className="metric-icon cyan"><TriangleAlert size={18} /></span></div>
         <div className="overview-alerts">
           {pendingApprovals>0 && <Alert icon={ClipboardCheck} tone="blue" title={`${num(pendingApprovals)} pending ${pendingApprovals===1 ? "approval" : "approvals"}`}
             detail="Discounts, credit and returns" action={()=>go("approvals")} />}
+          {approvedSales>0 && <Alert icon={ReceiptText} tone="teal" title={`${num(approvedSales)} approved ${approvedSales===1 ? "sale" : "sales"} to complete`}
+            detail="Confirm payment and record the sale" action={()=>go("approvals/approved")} />}
           {pendingJobs.length>0 && <Alert icon={RadioTower} tone="teal" title={`${num(pendingJobs.length)} installation ${pendingJobs.length===1 ? "request" : "requests"}`}
             detail="Review and schedule" action={()=>openJob(pendingJobs.at(-1)!.id)} />}
           {low.length>0 && <Alert icon={PackageOpen} tone="cyan" title={`${num(low.length)} ${low.length===1 ? "product needs" : "products need"} restocking`}
@@ -193,7 +194,7 @@ export function Dashboard({ data, go, openSale, openQuote, openJob }: {
             detail={`${dueQuotes[0].number} · ${date(dueQuotes[0].valid_until)}`} action={()=>openQuote(dueQuotes[0])} />}
           {lateJobs.length>0 && <Alert icon={RadioTower} tone="cyan" title={`${num(lateJobs.length)} overdue ${lateJobs.length===1 ? "installation" : "installations"}`}
             detail={`${lateJobs[0].number} · ${date(lateJobs[0].scheduled)}`} action={()=>openJob(lateJobs[0].id)} />}
-          {!pendingApprovals && !pendingJobs.length && !low.length && !overdue.length && !dueQuotes.length && !lateJobs.length && <Empty title="No alerts right now" icon={CheckCircle2} />}
+          {!pendingApprovals && !approvedSales && !pendingJobs.length && !low.length && !overdue.length && !dueQuotes.length && !lateJobs.length && <Empty title="No alerts right now" icon={CheckCircle2} />}
         </div>
         {sells && <div className="overview-balance"><span>Total invoice balance</span><strong>{money(kpi.outstanding ?? 0)}</strong></div>}
       </article>

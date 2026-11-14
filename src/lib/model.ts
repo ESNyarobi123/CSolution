@@ -54,7 +54,7 @@ export type Approval = {
   created_at: string; result_sale_id: string | null; summary: ApprovalSummary
 }
 export type Snapshot = {
-  user: User; business: Business; today: string; days: number; updatedAt: string;
+  user: User; business: Business; today: string; days: number; reportRange: ReportRange; updatedAt: string;
   kpi: { revenue: number; collected: number; profit?: number; net?: number; stockValue?: number; stockCount: number; outstanding?: number; saleCount: number } & Partial<ReportCosts>;
   previous: { revenue: number; collected: number; profit?: number; net?: number };
   series: SeriesPoint[]; categories: Group[]; brands: Group[]; products: Product[]; customers: Customer[];
@@ -63,3 +63,4 @@ export type Snapshot = {
   approvals: Approval[];
   breakdown: { products: Breakdown[]; brands: Breakdown[]; categories: Breakdown[]; agents: Breakdown[] }
 }
+import type { ReportRange } from "./report-period"

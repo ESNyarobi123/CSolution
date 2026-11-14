@@ -3,6 +3,8 @@ import { can } from "@/lib/access"
 import { getUser, sameOrigin } from "@/lib/auth"
 import { changeShop, ShopError } from "@/lib/mutations"
 import { getJob, getSale, getSnapshot } from "@/lib/queries"
+import { shopDay } from "@/lib/format"
+import { maxReportDays, rangeDays, reportPresets } from "@/lib/report-period"
 
 export const dynamic = "force-dynamic"
 
@@ -19,8 +21,19 @@ export async function GET(request: Request) {
     const data = detail === "sale" ? await getSale(id.data,user) : await getJob(id.data,user)
     return data ? Response.json(data) : Response.json({ error: "Record could not be found." }, { status: 404 })
   }
-  const days = Number(search.get("days"))
-  return Response.json(await getSnapshot(user,[7,14,30,90].includes(days) ? days : 7))
+  const preset = search.get("period") ?? search.get("days") ?? "today"
+  if (preset==="custom") {
+    const range = z.object({ from:z.iso.date(), to:z.iso.date() }).safeParse({
+      from:search.get("from"),to:search.get("to")
+    })
+    if (!range.success || range.data.from < "0002-01-01" || range.data.from > range.data.to ||
+      range.data.to > shopDay(new Date().toISOString()) || rangeDays(range.data) > maxReportDays) {
+      return Response.json({ error:`Choose a date range ending today or earlier, up to ${maxReportDays} days.` },{status:400})
+    }
+    return Response.json(await getSnapshot(user,{preset,...range.data}))
+  }
+  const parsed = z.enum(reportPresets).safeParse(preset)
+  return Response.json(await getSnapshot(user,{ preset:parsed.success ? parsed.data : "today" }))
 }
 
 export async function POST(request: Request) {

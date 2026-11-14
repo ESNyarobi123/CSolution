@@ -1,5 +1,6 @@
 import { can, ownSalesOnly, type User } from "./access"
 import { first, pool, rows } from "./db"
+import { offsetDay, rangeDays, reportRange, type ReportPeriod, type ReportRange } from "./report-period"
 import type { Approval, Breakdown, Business, Customer, Expense, Group, Job, JobDetail, Person, Product, Purchase, Quote, Sale, SaleDetail, SerialRecord, SeriesPoint, Snapshot, Staff, StockMovement } from "./model"
 
 export const saleSummary = `
@@ -33,25 +34,25 @@ const expenseList = `SELECT e.id,e.description,e.amount,e.job_id,j.number AS job
   FROM expenses e LEFT JOIN installations j ON j.id=e.job_id`
 const localDay = "(now() AT TIME ZONE 'Africa/Dar_es_Salaam')::date"
 const dailyResults = `WITH dates AS (
-  SELECT generate_series(${localDay}-($1::int*2-1),${localDay},interval '1 day')::date AS day
+  SELECT generate_series($1::date::timestamp,$2::date::timestamp,interval '1 day')::date AS day
 ), entries AS (
   SELECT (created_at AT TIME ZONE 'Africa/Dar_es_Salaam')::date AS day,
     total-tax AS revenue, cost AS cost_of_sales, 0 AS installation_materials, 0 AS installation_expenses,
     1 AS sale_count, 0 AS overhead, 0 AS collected FROM sales
-    WHERE ($2::uuid IS NULL OR cashier_id=$2)
+    WHERE ($3::uuid IS NULL OR cashier_id=$3)
   UNION ALL
   SELECT (r.created_at AT TIME ZONE 'Africa/Dar_es_Salaam')::date,-r.credit+r.tax_credit,
     CASE WHEN r.restock THEN -l.cost*r.quantity ELSE 0 END,0,0,0,0,-r.refund
   FROM returns r JOIN sale_items l ON l.id=r.sale_item_id JOIN sales s ON s.id=l.sale_id
-    WHERE ($2::uuid IS NULL OR s.cashier_id=$2)
+    WHERE ($3::uuid IS NULL OR s.cashier_id=$3)
   UNION ALL
   SELECT incurred,0,0,0,CASE WHEN job_id IS NOT NULL THEN amount ELSE 0 END,0,CASE WHEN job_id IS NULL THEN amount ELSE 0 END,0
-    FROM expenses WHERE $2::uuid IS NULL
+    FROM expenses WHERE $3::uuid IS NULL AND incurred BETWEEN $1::date AND $2::date
   UNION ALL
-  SELECT (created_at AT TIME ZONE 'Africa/Dar_es_Salaam')::date,0,0,quantity*cost,0,0,0,0 FROM installation_items WHERE $2::uuid IS NULL
+  SELECT (created_at AT TIME ZONE 'Africa/Dar_es_Salaam')::date,0,0,quantity*cost,0,0,0,0 FROM installation_items WHERE $3::uuid IS NULL
   UNION ALL
   SELECT (p.created_at AT TIME ZONE 'Africa/Dar_es_Salaam')::date,0,0,0,0,0,0,p.amount
-    FROM payments p JOIN sales s ON s.id=p.sale_id WHERE ($2::uuid IS NULL OR s.cashier_id=$2)
+    FROM payments p JOIN sales s ON s.id=p.sale_id WHERE ($3::uuid IS NULL OR s.cashier_id=$3)
 )
 SELECT dates.day::text,COALESCE(sum(revenue),0) AS sales,COALESCE(sum(revenue-cost_of_sales-installation_materials-installation_expenses),0) AS profit,
   COALESCE(sum(cost_of_sales),0) AS "costOfSales",COALESCE(sum(installation_materials),0) AS "installationMaterials",
@@ -65,19 +66,19 @@ function groupCounts(table: "categories" | "brands") {
     LEFT JOIN products p ON p.${foreignKey}=g.id AND p.active GROUP BY g.id ORDER BY g.name`)
 }
 
-async function breakdown(days: number) {
+async function breakdown({ from,to }: ReportRange) {
   const data = await rows<Breakdown & { kind: keyof Snapshot["breakdown"] }>(pool, `
     WITH movement AS (
       SELECT l.product_id,s.customer_id,s.buyer_type,l.quantity,
         CASE WHEN s.subtotal=0 THEN 0 ELSE l.quantity*l.price*(s.subtotal-s.discount)/s.subtotal END AS revenue,
         l.quantity*l.cost AS cost
       FROM sale_items l JOIN sales s ON s.id=l.sale_id
-      WHERE (s.created_at AT TIME ZONE 'Africa/Dar_es_Salaam')::date BETWEEN ${localDay}-($1::int-1) AND ${localDay}
+      WHERE (s.created_at AT TIME ZONE 'Africa/Dar_es_Salaam')::date BETWEEN $1::date AND $2::date
       UNION ALL
       SELECT l.product_id,s.customer_id,s.buyer_type,-r.quantity,-r.credit+r.tax_credit,
         CASE WHEN r.restock THEN -l.cost*r.quantity ELSE 0 END
       FROM returns r JOIN sale_items l ON l.id=r.sale_item_id JOIN sales s ON s.id=l.sale_id
-      WHERE (r.created_at AT TIME ZONE 'Africa/Dar_es_Salaam')::date BETWEEN ${localDay}-($1::int-1) AND ${localDay}
+      WHERE (r.created_at AT TIME ZONE 'Africa/Dar_es_Salaam')::date BETWEEN $1::date AND $2::date
     )
     SELECT d.kind,d.name,d.product_id,d.sku,
       round(sum(m.revenue)) AS sales,sum(m.quantity) AS units,round(sum(m.revenue-m.cost)) AS profit
@@ -87,13 +88,16 @@ async function breakdown(days: number) {
       ('products',p.name,p.id,p.sku),('categories',c.name,NULL,NULL),
       ('brands',b.name,NULL,NULL),('agents',a.name,NULL,NULL)
     ) d(kind,name,product_id,sku)
-    WHERE d.name IS NOT NULL GROUP BY d.kind,d.name,d.product_id,d.sku ORDER BY sales DESC,d.name,d.sku`, [days])
+    WHERE d.name IS NOT NULL GROUP BY d.kind,d.name,d.product_id,d.sku ORDER BY sales DESC,d.name,d.sku`, [from,to])
   const result: Snapshot["breakdown"] = { products: [], brands: [], categories: [], agents: [] }
   for (const { kind, ...item } of data) result[kind].push(item)
   return result
 }
 
-export async function getSnapshot(user: User, days = 7): Promise<Snapshot> {
+export async function getSnapshot(user: User, period: ReportPeriod = { preset:"today" }): Promise<Snapshot> {
+  const { today } = (await first<{ today: string }>(pool, `SELECT ${localDay}::text AS today`))!
+  const range = reportRange(today,period)
+  const days = rangeDays(range)
   const financials = can(user.role, "reports")
   const costs = can(user.role, "costs")
   const sells = can(user.role, "sales")
@@ -106,10 +110,9 @@ export async function getSnapshot(user: User, days = 7): Promise<Snapshot> {
   const salesOwner = ownSales ? user.id : null
   const ownRequests = can(user.role,"requestJobs")
   const jobScope = technician ? " WHERE j.technician_id=$1" : ownRequests ? " WHERE j.created_by=$1" : ""
-  const [business, date, products, categories, brands, customers, suppliers, purchases, movements,
+  const [business, products, categories, brands, customers, suppliers, purchases, movements,
     sales, quotes, jobs, staff, expenses, audit, daily, stock, report, balance, serials, approvals] = await Promise.all([
     first<Business>(pool, "SELECT name,phone,email,address,invoice_prefix,currency FROM business WHERE id=1"),
-    first<{ today: string }>(pool, `SELECT ${localDay}::text AS today`),
     rows<Product>(pool, `SELECT p.id,p.name,p.sku,p.category_id,p.brand_id,c.name AS category,b.name AS brand,p.type,
       p.unit,p.description,${costs ? "p.cost," : ""}p.price,p.agent_price,p.reorder,p.warranty,p.on_hand,p.active,p.image_url,p.installation
       FROM products p LEFT JOIN categories c ON c.id=p.category_id LEFT JOIN brands b ON b.id=p.brand_id
@@ -138,10 +141,10 @@ export async function getSnapshot(user: User, days = 7): Promise<Snapshot> {
     financials ? rows<Expense>(pool, expenseList + " ORDER BY e.incurred DESC,e.created_at DESC") : [],
     admin ? rows<Snapshot["audit"][number]>(pool, `SELECT a.id,a.action,a.detail,u.name AS staff,a.created_at
       FROM audit_logs a JOIN staff u ON u.id=a.staff_id ORDER BY a.created_at DESC`) : [],
-    sells ? rows<Omit<Required<SeriesPoint>, "net"> & { sale_count: number }>(pool, dailyResults, [days,salesOwner]) : [],
+    sells ? rows<Omit<Required<SeriesPoint>, "net"> & { sale_count: number }>(pool, dailyResults, [offsetDay(range.from,-days),range.to,salesOwner]) : [],
     first(pool, `SELECT count(*) FILTER (WHERE active) AS skus,${financials ? "COALESCE(sum(cost*on_hand),0)" : "0"} AS value
       FROM products WHERE type='Stocked'`),
-    financials ? breakdown(days) : { products: [], brands: [], categories: [], agents: [] },
+    financials ? breakdown(range) : { products: [], brands: [], categories: [], agents: [] },
     sells ? first(pool, "SELECT COALESCE(sum(balance),0) AS value FROM (" + saleSummary + (ownSales ? " WHERE s.cashier_id=$1" : "") + ") s", ownSales ? [user.id] : []) : undefined,
     inventory ? rows<SerialRecord>(pool, `SELECT DISTINCT ON (product_id,lower(serial))
       id,serial,product,sku,reference,source,customer,warranty_until,status
@@ -174,7 +177,7 @@ export async function getSnapshot(user: User, days = 7): Promise<Snapshot> {
   const total = aggregate(current)
   const prior = aggregate(daily.slice(0, days))
   return {
-    user, business: business!, today: date!.today, days, updatedAt: new Date().toISOString(),
+    user, business: business!, today, days, reportRange:range, updatedAt: new Date().toISOString(),
     kpi: { revenue: total.revenue, collected: total.collected, saleCount: total.saleCount, stockCount: stock!.skus,
       ...(financials ? { profit: total.profit, net: total.net, overhead: total.overhead, costOfSales: total.costOfSales,
         installationMaterials: total.installationMaterials, installationExpenses: total.installationExpenses, stockValue: stock!.value } : {}),

@@ -48,7 +48,7 @@ const schema = z.discriminatedUnion("action", [
   returnInput,
   z.object({ action: z.literal("requestSaleApproval"), sale: saleInput, reason: name }),
   z.object({ action: z.literal("requestReturnApproval"), item: returnInput }),
-  z.object({ action: z.literal("reviewApproval"), id, decision: z.enum(["approve","reject"]), note: text }),
+  z.object({ action: z.literal("reviewApproval"), id, decision: z.enum(["approve","reject"]), note: text, recordSale: z.boolean().optional() }),
   z.object({ action: z.literal("completeApprovedSale"), id }),
   z.object({ action: z.literal("job"), id: id.optional(), title: name, customerId: id.nullable(), saleId: id.nullable(),
     technicianId: id.nullable(), location: text, notes: text, scheduled: day.nullable(), status: z.enum(jobStatuses), services: installationSelection }),
@@ -432,9 +432,25 @@ async function requestApproval(db: Client, user: User, input: Extract<Action, { 
   return { id:payload.requestId }
 }
 
+type LockedApproval = {
+  id: string; requested_by: string; kind: "Sale terms" | "Return"; status: string;
+  payload: unknown; summary: ApprovalSummary; result_sale_id: string | null
+}
+
+const approvalForUpdate = "SELECT * FROM approval_requests"
+
 async function reviewApproval(db: Client, user: User, input: Extract<Action, { action:"reviewApproval" }>) {
   if (input.decision==="reject" && !input.note) throw new ShopError("Enter a reason for rejecting this request.")
-  const approval = required(await first(db,"SELECT * FROM approval_requests WHERE id=$1 FOR UPDATE",[input.id]),"Approval request could not be found.")
+  const approval = required(await first<LockedApproval>(db,approvalForUpdate+" WHERE id=$1 FOR UPDATE",[input.id]),"Approval request could not be found.")
+  if (input.decision==="approve" && input.recordSale && approval.kind==="Sale terms") {
+    if (approval.status==="Completed") return { id:input.id,saleId:approval.result_sale_id }
+    if (approval.status!=="Pending") throw new ShopError("This request has already been reviewed.",409)
+    const sale = await recordApprovedSale(db,user,approval)
+    await db.query("UPDATE approval_requests SET reviewed_by=$2,review_note=$3,reviewed_at=now() WHERE id=$1",
+      [input.id,user.id,input.note])
+    await audit(db,user,"Approval granted",approval.kind+" · "+input.id)
+    return { id:input.id,saleId:sale.id }
+  }
   if (approval.status!=="Pending") throw new ShopError("This request has already been reviewed.",409)
   let status = input.decision==="reject" ? "Rejected" : "Approved"
   let result: { id:string; refund:number } | undefined
@@ -449,13 +465,23 @@ async function reviewApproval(db: Client, user: User, input: Extract<Action, { a
 }
 
 async function completeApprovedSale(db: Client, user: User, approvalId: string) {
-  const approval = required(await first(db,"SELECT * FROM approval_requests WHERE id=$1 AND requested_by=$2 AND kind='Sale terms' FOR UPDATE",
-    [approvalId,user.id]),"Approval request could not be found.")
+  const approval = required(await first<LockedApproval>(db,`${approvalForUpdate} WHERE id=$1
+    AND ($2::uuid IS NULL OR requested_by=$2) AND kind='Sale terms' FOR UPDATE`,
+    [approvalId,can(user.role,"reviewApprovals") ? null : user.id]),"Approval request could not be found.")
   if (approval.status==="Completed") return { id:approval.result_sale_id }
   if (approval.status!=="Approved") throw new ShopError("This sale is waiting for administrator approval.",409)
-  const sale = await checkout(db,user,saleInput.parse(approval.payload),{approved:approval.summary})
-  await db.query("UPDATE approval_requests SET status='Completed',result_sale_id=$2 WHERE id=$1",[approvalId,sale.id])
-  await audit(db,user,"Approved sale completed",approvalId+" · "+sale.number)
+  return recordApprovedSale(db,user,approval)
+}
+
+async function recordApprovedSale(db: Client, actor: User, approval: LockedApproval) {
+  const requester = required(await first<Pick<User,"id"|"name"|"email">>(db,"SELECT id,name,email FROM staff WHERE id=$1",
+    [approval.requested_by]),"The staff member who requested this sale could not be found.")
+  const input = saleInput.parse(approval.payload)
+  // A sale with no explicitly chosen date is booked on the day it is recorded,
+  // so an approval completed today shows up in today's figures.
+  const sale = await checkout(db,{...requester,role:"Front Office"},input,{approved:approval.summary})
+  await db.query("UPDATE approval_requests SET status='Completed',result_sale_id=$2 WHERE id=$1",[approval.id,sale.id])
+  await audit(db,actor,"Approved sale completed",approval.id+" · "+sale.number)
   return sale
 }
 
@@ -466,7 +492,9 @@ export async function changeShop(raw: unknown, user: User) {
     throw new ShopError(issue.path.join(" · ") + " — " + issue.message)
   }
   const input = parsed.data
-  if (!can(user.role,rules[input.action])) throw new ShopError("You do not have permission for this action.",403)
+  if (!can(user.role,rules[input.action]) && !(input.action==="completeApprovedSale" && can(user.role,"reviewApprovals"))) {
+    throw new ShopError("You do not have permission for this action.",403)
+  }
   if ((input.action === "quote" || input.action === "expense") && input.id && !can(user.role,"admin")) {
     throw new ShopError("Administrator access is required to edit this record.",403)
   }

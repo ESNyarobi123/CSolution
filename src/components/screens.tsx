@@ -8,7 +8,7 @@ import { date, initials, money, num, shopDay } from "@/lib/format"
 import { buyerTypes, expenseCategories, jobStatuses } from "@/lib/model"
 import type { Customer, Expense, Group, Job, Person, Product, Purchase, Quote, Sale, SerialRecord, Snapshot, Staff, StockMovement } from "@/lib/model"
 import { ActionMenu, Badge, type Column, Empty, ErrorLine, Field, type MenuAction, ProductPhoto, SearchBox, Select, Table } from "./ui"
-import { growth, Metric, reportStart, RevenueChart } from "./dashboard"
+import { growth, Metric, RevenueChart } from "./dashboard"
 
 export type Panel =
   { kind:"categories"|"brands"; record?:Group } |
@@ -348,8 +348,8 @@ export function Expenses({ data,open,embedded = false }: Props & { embedded?:boo
   const change = (field: keyof typeof filters, value: string)=>setFilters(current=>({...current,[field]:value}))
   const { query,category,scope,period,from,to } = filters
   const invalidDates = period==="custom" && Boolean(from && to && from>to)
-  const start = period==="report" ? reportStart(data.today,data.days) : period==="custom" ? from : ""
-  const end = period==="report" ? data.today : period==="custom" ? to : ""
+  const start = period==="report" ? data.reportRange.from : period==="custom" ? from : ""
+  const end = period==="report" ? data.reportRange.to : period==="custom" ? to : ""
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
   const matches = invalidDates ? [] : data.expenses.filter(expense=>{
     const labels = fields(expense.description,expense.category,expense.reference,expense.notes,expense.job,expense.method).toLowerCase()
@@ -531,7 +531,7 @@ export function ProductDetail({ data, product, open }: Props & { product: Produc
       {stocked && product.cost !== undefined && <div><small>Stock value</small><strong>{money(product.cost*product.on_hand)}</strong></div>}
     </div>
     {can(data.user.role,"reports") && <div className="product-results">
-      <h3>Recorded sales · Last {data.days} days</h3>
+      <h3>Recorded sales · {date(data.reportRange.from)}{data.reportRange.from!==data.reportRange.to && " – "+date(data.reportRange.to)}</h3>
       <div className="detail-summary">
         <div><small>Sold less returns</small><strong>{num(performance?.units ?? 0)}</strong></div>
         <div><small>Net sales before tax</small><strong>{money(performance?.sales ?? 0)}</strong></div>
@@ -573,7 +573,7 @@ function ProfitStatement({ data,viewExpenses }: { data: Snapshot; viewExpenses?:
   const margin = revenue>0 ? (net/revenue*100).toFixed(1)+"%" : "—"
   const loss = net<0
   return <article className="panel report-statement">
-    <div className="panel-head"><div><h2>Profit & loss</h2><p>{date(reportStart(data.today,data.days))} – {date(data.today)}</p></div></div>
+    <div className="panel-head"><div><h2>Profit & loss</h2><p>{date(data.reportRange.from)}{data.reportRange.from!==data.reportRange.to && " – "+date(data.reportRange.to)}</p></div></div>
     <dl>
       <div><dt>Sales revenue · after returns, before tax</dt><dd>{money(revenue)}</dd></div>
       <div><dt>Cost of sold items & services</dt><dd>{money(costOfSales)}</dd></div>
@@ -600,12 +600,12 @@ export function Analytics({ data,open }: Props) {
   const amounts = data.breakdown[key].filter(item=>fields(item.name,item.sku).toLowerCase().includes(search.trim().toLowerCase()))
     .sort((a,b)=>sort==="name" ? a.name.localeCompare(b.name) : b[sort]-a[sort] || a.name.localeCompare(b.name))
   const { kpi,previous } = data
-  const start = reportStart(data.today,data.days)
-  const reportDates = date(start)+" – "+date(data.today)
+  const { from,to } = data.reportRange
+  const reportDates = from===to ? date(from) : date(from)+" – "+date(to)
   const profit = kpi.profit ?? 0
   const overhead = kpi.overhead ?? 0
   const net = kpi.net ?? 0
-  const filePrefix = "CSolution-"+start+"-to-"+data.today
+  const filePrefix = "CSolution-"+from+"-to-"+to
   const hasSku = key==="products"
 
   function exportBreakdown() {
@@ -638,7 +638,7 @@ export function Analytics({ data,open }: Props) {
     </div>
     {mode==="Performance" ? <div className="stack">
       <div className="analytics-grid">
-        <RevenueChart points={data.series} days={data.days} />
+        <RevenueChart points={data.series} />
         <ProfitStatement data={data} viewExpenses={()=>setMode("Expenses")} />
       </div>
       <article className="panel">
