@@ -416,6 +416,7 @@ function LoadDetail<T>({ type,id,children }: { type:"sale"|"job";id:string;child
 }
 function SaleView({ detail,data,open }: { detail:SaleDetail;data:Snapshot;open:(panel:Panel)=>void }) {
   const s=detail.sale
+  const showNegotiation = can(data.user.role,"pricing")
   const grossProfit = s.net_cost === undefined ? null : s.net_revenue - s.net_cost
   return <div className="stack">
     <div className="record-title"><div><h3>{s.number} · {s.customer_name}</h3><p>{s.buyer_type} · {s.kind} · {date(s.created_at)} · {s.cashier}</p></div><Badge value={s.status} /></div>
@@ -438,7 +439,8 @@ function SaleView({ detail,data,open }: { detail:SaleDetail;data:Snapshot;open:(
     </div>
     <div className="detail-block"><h3>Items</h3><Table rows={detail.lines} columns={[
       {label:"Item",cell:l=><><strong>{l.name}</strong><small className="table-sub">{l.serial ? "S/N "+l.serial : l.sku}{l.returned>0 ? " · "+l.returned+" returned" : ""}</small>{l.warranty_until && <small className="table-sub">Warranty until {date(l.warranty_until)}</small>}</>},
-      {label:"Quantity",cell:l=>num(l.quantity)+" "+l.unit},{label:"Unit price",cell:l=>money(l.price),numeric:true},
+      {label:"Quantity",cell:l=>num(l.quantity)+" "+l.unit},{label:"Unit price",cell:l=><>{money(l.price)}{showNegotiation && l.list_price!==null && l.list_price!==undefined && l.list_price!==l.price &&
+        <small className="table-sub">Negotiated · was {money(l.list_price)}</small>}</>,numeric:true},
       ...(can(data.user.role,"reports")?[{label:"Unit cost",cell:(l:SaleDetail["lines"][number])=>money(l.cost??0),numeric:true}]:[]),
       {label:"Total",cell:l=><strong>{money(l.price*l.quantity)}</strong>,numeric:true}
     ]} /></div>

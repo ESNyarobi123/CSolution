@@ -28,9 +28,9 @@ export type Sale = {
   discount: number; tax: number; total: number; cost?: number; net_revenue: number; net_cost?: number; paid: number; credits: number;
   balance: number; due_date: string | null; last_payment_at: string | null; created_at: string; status: "Paid" | "Partial" | "Unpaid" | "Returned"
 }
-export type Line = { productId: string; quantity: number; price?: number; serial?: string }
+export type Line = { productId: string; quantity: number; price?: number; serial?: string; listPrice?: number; negotiationNote?: string }
 export type SaleLine = {
-  id: string; product_id: string; name: string; sku: string; unit: string; quantity: number; price: number;
+  id: string; product_id: string; name: string; sku: string; unit: string; quantity: number; price: number; list_price?: number | null;
   cost?: number; type: string; serial: string; warranty_until: string | null; returned: number
 }
 export type SaleDetail = { sale: Sale; lines: SaleLine[]; payments: { id: string; method: string; amount: number; reference: string; created_at: string }[]; returns: { id: string; product: string; quantity: number; credit: number; refund: number; reason: string; created_at: string }[] }
@@ -45,7 +45,7 @@ export type Breakdown = { name: string; product_id: string | null; sku: string |
 export type ApprovalSummary = {
   buyer: string; total: number; paid: number; discount: number; method?: typeof methods[number];
   dueDate?: string | null; soldOn?: string | null; saleNumber?: string; refund?: number; credit?: number; restock?: boolean;
-  items: { name: string; quantity: number; price: number }[]
+  items: { name: string; quantity: number; price: number; listPrice?: number; note?: string }[]
 }
 export type Approval = {
   id: string; kind: "Sale terms" | "Return"; status: "Pending" | "Approved" | "Rejected" | "Completed";

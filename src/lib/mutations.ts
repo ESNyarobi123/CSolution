@@ -18,7 +18,8 @@ const contact = {
   id: id.optional(), name, phone: z.string().trim().max(40).default(""),
   email: z.union([z.email(), z.literal("")]).default(""), address: text
 }
-const line = z.object({ productId: id, quantity, price: amount.optional(), expectedUnitPrice: amount.optional(), serial: z.string().trim().max(100).optional() })
+const line = z.object({ productId: id, quantity, price: amount.optional(), expectedUnitPrice: amount.optional(), serial: z.string().trim().max(100).optional(),
+  listPrice: amount.optional(), negotiationNote: z.string().trim().max(300).optional() })
 const cart = {
   customerId: id.nullable(), buyerType: z.enum(buyerTypes).optional(), newBuyer: z.object({ name }).optional(),
   lines: z.array(line).min(1).max(100), expectedTotal: transactionAmount.optional(),
@@ -253,7 +254,11 @@ async function checkout(db: Client, user: User, input: Checkout, options?: { req
     const product = required(byId.get(entry.productId), "An item is no longer available.")
     const usual = customer.buyerType === "Agent" ? (product.agent_price ?? product.price) : product.price
     const unitPrice = entry.price ?? usual
-    if (!quote && !editPrice && unitPrice !== usual) throw new ShopError("A manager must approve custom prices.", 403)
+    // A negotiated price is only accepted from staff who may set prices, or
+    // when it is travelling through an approval request.
+    if (!quote && !editPrice && unitPrice !== usual && !options?.request && !options?.approved) {
+      throw new ShopError("A manager must approve custom prices.", 403)
+    }
     if (entry.expectedUnitPrice !== undefined && entry.expectedUnitPrice !== unitPrice) {
       throw new ShopError(`The price of ${product.name} changed. Review the updated items before saving.`,409)
     }
@@ -261,7 +266,7 @@ async function checkout(db: Client, user: User, input: Checkout, options?: { req
       throw new ShopError("A serial number can only be entered for a single stocked unit.")
     }
     if (product.type === "Stocked") totals.set(product.id, (totals.get(product.id) ?? 0) + entry.quantity)
-    return { ...entry, product, price: unitPrice }
+    return { ...entry, product, price: unitPrice, usual }
   })
   const subtotal = items.reduce((sum, item) => sum + item.quantity * item.price, 0)
   const cost = items.reduce((sum, item) => sum + item.quantity * (item.product.cost ?? 0), 0)
@@ -308,8 +313,8 @@ async function checkout(db: Client, user: User, input: Checkout, options?: { req
   }
   if (input.paid > total) throw new ShopError("Payment cannot exceed the sale total.")
   if (input.paid < total && !customer.id && !(options?.request && input.newBuyer)) throw new ShopError("Choose a customer for an unpaid balance.")
-  if (frontOffice && (discount>0 || input.paid<total) && !options?.request && !options?.approved) {
-    throw new ShopError("Request approval for the discount or unpaid balance.",403)
+  if (frontOffice && (discount>0 || input.paid<total || items.some(item=>item.price!==item.usual)) && !options?.request && !options?.approved) {
+    throw new ShopError("Request approval for the discount, negotiated price or unpaid balance.",403)
   }
   if (input.installation) {
     if (frontOffice) {
@@ -321,9 +326,10 @@ async function checkout(db: Client, user: User, input: Checkout, options?: { req
     }
   }
   const summary: ApprovalSummary = {buyer:customer.name,total,discount,paid:input.paid,method:input.method,dueDate:input.dueDate,soldOn,
-    items:items.map(item=>({name:item.product.name,quantity:item.quantity,price:item.price}))}
+    items:items.map(item=>item.price===item.usual ? {name:item.product.name,quantity:item.quantity,price:item.price} :
+      {name:item.product.name,quantity:item.quantity,price:item.price,listPrice:item.usual,...(item.negotiationNote ? {note:item.negotiationNote} : {})})}
   if (options?.request) {
-    if (!discount && input.paid===total) throw new ShopError("This sale does not require approval.")
+    if (!discount && input.paid===total && !items.some(item=>item.price!==item.usual)) throw new ShopError("This sale does not require approval.")
     return { summary }
   }
   const approved = options?.approved
@@ -342,10 +348,11 @@ async function checkout(db: Client, user: User, input: Checkout, options?: { req
     RETURNING id,number,invoice`, [saleId,input.requestId,customer.id,customer.name,customer.address,customer.phone,user.id,
     kind,subtotal,discount,tax,total,cost,input.dueDate,customer.buyerType,soldOn]), "Sale could not be saved.")
   for (const item of items) {
-    await db.query(`INSERT INTO sale_items (sale_id,product_id,name,quantity,price,cost,type,serial,unit,warranty_until)
+    await db.query(`INSERT INTO sale_items (sale_id,product_id,name,quantity,price,cost,type,serial,unit,warranty_until,list_price)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,CASE WHEN $10::integer>0 THEN
-        ((COALESCE($11::date,(now() AT TIME ZONE 'Africa/Dar_es_Salaam')::date) + make_interval(months=>$10::integer))::date) END)`,
-      [saleId,item.productId,item.product.name,item.quantity,item.price,item.product.cost,item.product.type,item.serial ?? "",item.product.unit,item.product.warranty,soldOn])
+        ((COALESCE($11::date,(now() AT TIME ZONE 'Africa/Dar_es_Salaam')::date) + make_interval(months=>$10::integer))::date) END,
+        CASE WHEN $12::numeric IS NOT NULL AND $12::numeric<>$5::numeric THEN $12::numeric END)`,
+      [saleId,item.productId,item.product.name,item.quantity,item.price,item.product.cost,item.product.type,item.serial ?? "",item.product.unit,item.product.warranty,soldOn,item.usual])
   }
   for (const [productId,count] of totals) await moveStock(db,user,productId,-count,"Sale",saved.number)
   await addPayment(db,user,saleId,input.requestId,input.paid,input.method,input.reference,soldOn)

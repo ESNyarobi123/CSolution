@@ -1,11 +1,11 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { Box, CircleDollarSign, CopyPlus, CreditCard, FileText, ImagePlus, Minus, PackageOpen, Plus, ShoppingCart, Trash2, UploadCloud, Wallet, Wrench } from "lucide-react"
+import { Box, CircleDollarSign, CopyPlus, CreditCard, FileText, ImagePlus, Minus, PackageOpen, PenLine, Plus, ShoppingCart, Trash2, UploadCloud, Wallet, Wrench } from "lucide-react"
 import { can, roles } from "@/lib/access"
 import { date, money, num, requestJSON } from "@/lib/format"
 import { customerTypes, expenseCategories, jobStatuses, methods, productTypes, type BuyerType, type Customer, type Expense, type Group, type Job, type JobDetail, type Line, type Person, type Product, type Purchase, type Quote, type Sale, type SaleDetail, type Snapshot, type Staff } from "@/lib/model"
-import { ErrorLine, Field, Form, numberVal as n, opt, ProductPhoto, Select, val as v } from "./ui"
+import { ErrorLine, Field, Form, Modal, numberVal as n, opt, ProductPhoto, Select, val as v } from "./ui"
 import { CheckoutBuyer, buyerNameKey, isBuyerAccount } from "./checkout-buyer"
 import { SaleCatalog } from "./sale-catalog"
 
@@ -143,6 +143,45 @@ function InstallationPicker({ types, selected, price, toggle }: {
   </fieldset>
 }
 
+function NegotiationPopup({ line, shelf, current, apply, close }: {
+  line: string; shelf: number; current: number; apply: (price: number, note: string) => void; close: () => void
+}) {
+  const [price,setPrice] = useState(current ? String(current) : "")
+  const [note,setNote] = useState("")
+  const [error,setError] = useState("")
+  const agreed = Number(price)
+  const valid = Number.isFinite(agreed) && agreed > 0
+  const reduction = valid ? Math.max(0, shelf - agreed) : 0
+  function applyNow() {
+    if (!valid) { setError("Enter the price the customer agreed to pay."); return }
+    if (agreed > shelf) { setError("The agreed price cannot be higher than the shelf price."); return }
+    if (agreed === shelf) { setError("Change the price to make a negotiation request."); return }
+    if (!note.trim()) { setError("Write why the customer asked for a lower price."); return }
+    apply(agreed,note.trim())
+  }
+  return <Modal title="Negotiate the price" subtitle={line} close={close}>
+    <div className="negotiate" onKeyDown={event=>{ if (event.key==="Enter") { event.preventDefault(); applyNow() } }}>
+      <div className="negotiate-summary">
+        <div><small>Shelf price</small><strong>{money(shelf)}</strong></div>
+        <div><small>Agreed price</small><strong>{money(valid ? agreed : 0)}</strong></div>
+        <div><small>Reduction</small><strong className={reduction>0 ? "negotiate-gain" : ""}>{money(reduction)}</strong></div>
+      </div>
+      <Field label="Agreed price per unit (TZS)" hint="The price on the invoice and the receipt will be this one. It is never shown as a discount.">
+        <input type="number" min="1" max={shelf} inputMode="numeric" value={price} onChange={event=>{setPrice(event.target.value);setError("")}} autoFocus />
+      </Field>
+      <Field label="Why did the customer ask for this price?" hint="Management reads this before approving. The customer never sees it.">
+        <textarea rows={3} maxLength={300} value={note} onChange={event=>{setNote(event.target.value);setError("")}} placeholder="Buying several units, long-standing customer, competitor price…" />
+      </Field>
+      <ErrorLine message={error} />
+      <p className="checkout-hint">This price needs management approval, so the sale is saved as a request first.</p>
+      <div className="negotiate-actions">
+        <button type="button" className="button secondary" onClick={close}>Cancel</button>
+        <button type="button" className="button primary" onClick={applyNow}>Use this price</button>
+      </div>
+    </div>
+  </Modal>
+}
+
 export function InstallationTypeForm({ record, close, save }: SimpleProps & { record?: Product }) {
   return <Form close={close} label={record ? "Save installation type" : "Add installation type"} onSave={f=>save({
     action:"installationType",id:record?.id,name:v(f,"name"),price:n(f,"price"),cost:n(f,"cost") || 0,
@@ -173,6 +212,7 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
   const [jobTitle,setJobTitle] = useState("")
   const suggestedTitle = useRef("")
   const requestId = useRef("")
+  const [negotiating,setNegotiating] = useState<{ key: string; name: string; shelf: number } | null>(null)
   const sequence = useRef(lines.length)
   const cartHeading = useRef<HTMLHeadingElement>(null)
   const isSale = mode === "sale"
@@ -188,7 +228,10 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
   const subtotal = lines.reduce((sum,line)=>sum+line.quantity*priceForLine(line),0)
   const total = subtotal - discount + tax
   const paid = payment==="full" ? total : payment==="partial" ? received ?? 0 : 0
-  const needsApproval = isSale && requestApprovals && (discount>0 || paid<total)
+  const negotiated = lines.filter(line=>line.listPrice!==undefined && priceForLine(line)!==line.listPrice)
+  const negotiationSummary = negotiated.map(line=>`${line.name} ${money(line.listPrice!)}→${money(priceForLine(line))}${line.negotiationNote ? " ("+line.negotiationNote+")" : ""}`).join("; ").slice(0,160)
+  const canNegotiate = isSale && !converting && !editPrice && requestApprovals
+  const needsApproval = isSale && requestApprovals && (discount>0 || paid<total || negotiated.length>0)
   const update = (key: string, patch: Partial<Line>)=>setLines(current=>current.map(line=>line.key===key ? {...line,...patch} : line))
   const products = data.products.filter(product=>product.active && (isSale ? !product.installation : true))
   const installationTypes = data.products.filter(product=>product.active && product.installation)
@@ -243,6 +286,15 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
       if (current.some(line=>line.productId===product.id) || current.length>=100) return current
       return [...current,{key:String(++sequence.current),name:product.name,productId:product.id,quantity:1}]
     })
+  }
+  // Apply the price the customer negotiated. The shelf price stays on the line
+  // so management can see the reduction afterwards, while the invoice and the
+  // receipt only ever use the agreed price.
+  function applyNegotiation(price: number, note: string) {
+    if (!negotiating) return
+    const { key, shelf } = negotiating
+    setNegotiating(null)
+    update(key,price<shelf ? {price,listPrice:shelf,negotiationNote:note} : {price:undefined,listPrice:undefined,negotiationNote:undefined})
   }
   useEffect(()=>{
     const next = installTypes.map(id=>productMap.get(id)?.name).filter(Boolean).join(" + ")
@@ -303,7 +355,7 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
         <div className="cart-name">
           <div className="sale-line-identity">
             {product && <ProductPhoto product={product} />}
-            <div><strong>{line.name}</strong><small>{[product?.installation ? "Installation service" : "",product?.sku,stocked && isSale ? num(product.on_hand)+" "+product.unit+" in stock" : ""].filter(Boolean).join(" · ")}</small></div>
+            <div><strong>{line.name}</strong><small>{[line.listPrice!==undefined && price!==line.listPrice ? "Negotiated price" : "",product?.installation ? "Installation service" : "",product?.sku,stocked && isSale ? num(product.on_hand)+" "+product.unit+" in stock" : ""].filter(Boolean).join(" · ")}</small></div>
           </div>
           {isSale && !converting && stocked && line.quantity===1 && <input aria-label={"Serial number for "+line.name} placeholder="Serial (optional)"
             value={line.serial ?? ""} maxLength={100} onChange={event=>update(line.key,{serial:event.target.value})} />}
@@ -319,10 +371,14 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
               aria-label={"Increase "+line.name+" quantity"} onClick={()=>update(line.key,{quantity:line.quantity+1})}><Plus size={14} /></button>}
           </div>
         </div>
-        <Field label="Unit price (TZS)"><input aria-label={"Unit price for "+line.name} type="number" min="0" max="9999999999" required value={price}
-          readOnly={!editPrice} onChange={event=>update(line.key,{price:event.target.valueAsNumber || 0})} /></Field>
+        <Field label="Unit price (TZS)" hint={line.listPrice!==undefined && price!==line.listPrice ? "Negotiated · shelf price "+money(line.listPrice) : undefined}>
+          <input aria-label={"Unit price for "+line.name} type="number" min="0" max="9999999999" required value={price}
+            readOnly={!editPrice} onChange={event=>update(line.key,{price:event.target.valueAsNumber || 0})} /></Field>
         <strong className="line-total">{money(line.quantity*price)}</strong>
         {!converting && <div className="sale-line-actions">
+          {canNegotiate && <button className="icon-btn" type="button"
+            aria-label={"Negotiate price for "+line.name} title="Ask management to approve a lower price"
+            onClick={()=>setNegotiating({key:line.key,name:line.name,shelf:lookupPrice(product)})}><PenLine size={15} /></button>}
           {product && <button className="icon-btn" type="button" disabled={!canAddUnit || lines.length>=100}
             aria-label={"Add a separate line for "+line.name} title="Add a separate line for another price or serial number"
             onClick={()=>addProduct(product,true)}><CopyPlus size={15} /></button>}
@@ -333,6 +389,7 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
     })}
   </div>
 
+  const negotiationTarget = negotiating ? lines.find(line=>line.key===negotiating.key) : undefined
   const submitLabel = needsApproval ? "Request approval" : isSale ? "Complete sale" : quote ? "Save quotation" : "Create quotation"
   return <Form close={close} onSave={submit} label={submitLabel} busyLabel={isSale ? "Recording sale…" : "Saving quotation…"}
     submitDisabled={!lines.length || Boolean(stockError || discountError || customerError || installationError)}
@@ -413,11 +470,13 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
             {isSale && payment!=="full" && <div><dt>Balance due</dt><dd>{money(Math.max(0,total-paid))}</dd></div>}
           </dl>
           {needsApproval && <Field label="Reason for approval" hint="The sale will be ready to complete after an administrator approves these terms.">
-            <input name="approvalReason" maxLength={160} required placeholder="Why is the discount or balance needed?" />
+            <input key={negotiationSummary} name="approvalReason" maxLength={160} required defaultValue={negotiationSummary}
+              placeholder="Why is the discount or balance needed?" />
           </Field>}
         </div>
       </section>
     </div>
+    {negotiating && negotiationTarget && <NegotiationPopup line={negotiating.name} shelf={negotiating.shelf} current={priceForLine(negotiationTarget)} apply={applyNegotiation} close={()=>setNegotiating(null)} />}
   </Form>
 }
 

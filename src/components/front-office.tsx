@@ -103,8 +103,13 @@ export function ApprovalDetail({ approval, data, open, close, save }: WorkspaceP
       {approval.review_note && <div><dt>Decision note</dt><dd className="approval-note">{approval.review_note}</dd></div>}
     </dl>
     <div className="panel"><Table rows={summary.items.map((item,i)=>({...item,id:String(i)}))} columns={[
-      {label:"Item",cell:item=>item.name},{label:"Quantity",cell:item=>num(item.quantity),numeric:true},
-      {label:"Unit price",cell:item=>money(item.price),numeric:true}
+      {label:"Item",cell:item=><>{item.name}{item.listPrice!==undefined && item.listPrice!==item.price &&
+        <small className="table-sub">Negotiated · down from {money(item.listPrice)}</small>}
+        {item.note && <small className="table-sub">{item.note}</small>}</>},
+      {label:"Quantity",cell:item=>num(item.quantity),numeric:true},
+      {label:"Unit price",cell:item=>money(item.price),numeric:true},
+      ...(summary.items.some(item=>item.listPrice!==undefined) ? [{label:"Reduction",cell:(item:typeof summary.items[number])=>
+        item.listPrice!==undefined && item.listPrice!==item.price ? <strong>{money((item.listPrice-item.price)*item.quantity)}</strong> : "—",numeric:true}] : [])
     ]} /></div>
     <div className="detail-summary">
       {isReturn ? <>

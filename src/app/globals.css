@@ -537,6 +537,13 @@ tbody .table-action-cell { background: var(--white); }
 .install-type-option span { flex: 1; display: grid; gap: 1px; min-width: 0; }
 .install-type-option small { color: var(--muted); font-size: 10.5px; }
 .install-type-option em { font-style: normal; font-weight: 680; white-space: nowrap; }
+.negotiate { display: grid; gap: 12px; }
+.negotiate-summary { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--wash-blue); }
+.negotiate-summary small { display: block; font-size: 11px; font-weight: 620; color: var(--muted); }
+.negotiate-summary strong { font: 780 15px var(--heading-font); color: var(--blue-deep); overflow-wrap: anywhere; }
+.negotiate-summary .negotiate-gain { color: #b42318; }
+.negotiate textarea { min-height: 74px; resize: vertical; }
+.negotiate-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 11px; border-top: 1px solid var(--line); }
 .checkout-form .form-end { position: sticky; bottom: 0; z-index: 2; background: var(--white); padding: 9px 16px 10px; border-top: 1px solid var(--line); box-shadow: 0 -4px 13px #102c540b; }
 .checkout-form .form-footer { margin: 0; padding: 0; border: 0; }
 .checkout-footer-summary { flex: 1; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }

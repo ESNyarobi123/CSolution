@@ -188,7 +188,7 @@ export async function getSale(id: string, user: User): Promise<SaleDetail | unde
     delete sale.net_cost
   }
   const [lines, payments, returned] = await Promise.all([
-    rows<SaleDetail["lines"][number]>(pool, `SELECT l.id,l.product_id,l.name,p.sku,l.unit,l.quantity,l.price,l.type,l.serial,l.warranty_until::text,
+    rows<SaleDetail["lines"][number]>(pool, `SELECT l.id,l.product_id,l.name,p.sku,l.unit,l.quantity,l.price,l.list_price,l.type,l.serial,l.warranty_until::text,
       ${can(user.role, "reports") ? "l.cost," : ""}COALESCE(sum(r.quantity),0) AS returned
       FROM sale_items l JOIN products p ON p.id=l.product_id LEFT JOIN returns r ON r.sale_item_id=l.id
       WHERE l.sale_id=$1 GROUP BY l.id,p.id ORDER BY l.id`, [id]),
