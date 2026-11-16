@@ -36,7 +36,8 @@ const schema = z.discriminatedUnion("action", [
     categoryId: id.nullable(), brandId: id.nullable(), type: z.enum(productTypes), unit: z.string().trim().min(1).max(15),
     description: text, cost: amount, price: amount, agentPrice: amount.nullable(),
     reorder: z.number().int().min(0).max(100000), warranty: z.number().int().min(0).max(120),
-    initialStock: z.number().int().min(0).max(100000).default(0), imageUrl: z.string().max(2000).nullable(), active: z.boolean().default(true) }),
+    initialStock: z.number().int().min(0).max(100000).default(0), onHand: z.number().int().min(0).max(100000).optional(),
+    imageUrl: z.string().max(2000).nullable(), active: z.boolean().default(true) }),
   z.object({ action: z.literal("customer"), ...contact, kind: z.enum(customerTypes), code: z.string().trim().max(60).default("") }),
   z.object({ action: z.literal("supplier"), ...contact }),
   z.object({ action: z.literal("stock"), productId: id, delta: z.number().int().min(-100000).max(100000).refine(n => n !== 0), reason: name }),
@@ -565,7 +566,12 @@ export async function changeShop(raw: unknown, user: User) {
         }
         if (input.id) {
           previous = required(await first<Product>(db,"SELECT * FROM products WHERE id=$1 FOR UPDATE",[input.id]),"Product could not be found.")
-          if (previous.active && !input.active && previous.on_hand > 0) throw new ShopError("Adjust the remaining stock to zero before archiving this product.",409)
+          if (input.onHand !== undefined && input.type !== "Stocked") {
+            throw new ShopError("Only stocked products keep a quantity on hand.")
+          }
+          // The counted quantity replaces the balance, so archiving and clearing stock can happen in one save.
+          const remaining = input.onHand ?? previous.on_hand
+          if (previous.active && !input.active && remaining > 0) throw new ShopError("Adjust the remaining stock to zero before archiving this product.",409)
           if (previous.type !== input.type && (previous.on_hand > 0 ||
               await first(db,"SELECT id FROM stock_movements WHERE product_id=$1 LIMIT 1",[input.id]))) {
             throw new ShopError("This product has stock history. Create a separate product for a different item type.",409)
@@ -582,6 +588,10 @@ export async function changeShop(raw: unknown, user: User) {
           await first(db,`INSERT INTO products (name,sku,category_id,brand_id,type,unit,description,cost,price,agent_price,reorder,warranty,image_url,active)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,values),"Product could not be found.")
         if (!input.id && input.type === "Stocked") await moveStock(db,user,saved.id,input.initialStock,"Opening stock","Initial inventory")
+        if (previous && input.type === "Stocked" && input.onHand !== undefined && input.onHand !== previous.on_hand) {
+          await moveStock(db,user,input.id!,input.onHand - previous.on_hand,"Stock count","Product edit")
+          await audit(db,user,"Stock counted",`${input.sku.toUpperCase()} · ${previous.on_hand} → ${input.onHand} ${input.unit}`)
+        }
         if (previous && previous.cost !== input.cost) {
           const value = (cost: number) => "TZS " + Number(cost).toLocaleString("en-US",{ maximumFractionDigits: 0 })
           await audit(db,user,"Product cost updated",

@@ -39,6 +39,7 @@ export function ProductForm({ data, record, opening = false, close, save }: Form
   const [cost,setCost] = useState<number | null>(record?.cost ?? null)
   const [price,setPrice] = useState<number | null>(record?.price ?? null)
   const [stock,setStock] = useState<number | null>(opening ? null : 0)
+  const [onHand,setOnHand] = useState<number | null>(record?.on_hand ?? null)
   const [image,setImage] = useState(record?.image_url ?? "")
   const [file,setFile] = useState<File | null>(null)
   const [preview,setPreview] = useState("")
@@ -64,12 +65,13 @@ export function ProductForm({ data, record, opening = false, close, save }: Form
     await save({ action:"product",id:record?.id,name:v(form,"name"),sku:v(form,"sku"),type,unit:v(form,"unit"),
       categoryId:opt(form,"categoryId"),brandId:opt(form,"brandId"),description:v(form,"description"),
       price:n(form,"price"),cost:n(form,"cost"),agentPrice:opt(form,"agentPrice") === null ? null : n(form,"agentPrice"),
-      initialStock:n(form,"stock"),reorder:n(form,"reorder"),warranty:n(form,"warranty"),imageUrl,active:v(form,"active") !== "false" })
+      initialStock:n(form,"stock"),...(record && type === "Stocked" ? { onHand:n(form,"onHand") } : {}),
+      reorder:n(form,"reorder"),warranty:n(form,"warranty"),imageUrl,active:v(form,"active") !== "false" })
   }
   const visual = preview || image
   const grossPerUnit = cost !== null && price !== null ? price - cost : null
   const stocked = type === "Stocked"
-  const quantity = record ? record.on_hand : stock
+  const quantity = record ? onHand ?? record.on_hand : stock
   const stockValue = stocked && quantity !== null && cost !== null ? quantity * cost : null
   return <Form onSave={submit} close={close} label={record ? "Save product" : opening ? "Register stock" : "Add product"}>
     <div className="image-fields">
@@ -88,11 +90,18 @@ export function ProductForm({ data, record, opening = false, close, save }: Form
       {!opening && <Field label="Item type"><Select value={type} onChange={e=>setType(e.target.value as Product["type"])}>{productTypes.map(t=><option key={t}>{t}</option>)}</Select></Field>}
       <Field label="Unit of measure" hint="For example, pcs, m, roll or box."><input name="unit" value={unit} onChange={e=>setUnit(e.target.value)} required maxLength={15} /></Field>
       {stocked && !record && <Field label="Opening quantity" hint="Count the units physically in your shop."><input name="stock" type="number" min={opening ? "1" : "0"} max="100000" value={stock ?? ""} onChange={e=>setStock(e.target.value === "" ? null : e.target.valueAsNumber)} required={opening} /></Field>}
+      {stocked && record && <Field label={"Available quantity (" + unit + ")"}
+        hint={`This product shows ${num(record.on_hand)} ${unit} now. Type the number you counted in the shop — the difference is kept in the stock history.`}>
+        <input name="onHand" type="number" inputMode="numeric" min="0" max="100000" value={onHand ?? ""}
+          onChange={e=>setOnHand(e.target.value === "" ? null : e.target.valueAsNumber)} required /></Field>}
       <Field label="Cost per unit (TZS)" hint={record?.type === "Stocked" && record.on_hand > 0 ? "Changing this updates the stock value and future profit. The change is recorded in the activity log." : "What the shop paid per unit."}><input name="cost" type="number" min="0" max="9999999999" value={cost ?? ""} onChange={e=>setCost(e.target.value === "" ? null : e.target.valueAsNumber)} required /></Field>
       <Field label="Selling price per unit (TZS)"><input name="price" type="number" min="0" max="9999999999" value={price ?? ""} onChange={e=>setPrice(e.target.value === "" ? null : e.target.valueAsNumber)} required /></Field>
     </div>
     <div className="detail-summary product-calculation">
       {stocked && <div><small><PackageOpen size={14} /> {record ? "Stock value" : "Opening stock value"}</small><strong>{stockValue === null ? "—" : money(stockValue)}</strong></div>}
+      {stocked && record && onHand !== null && onHand !== record.on_hand &&
+        <div><small><PackageOpen size={14} /> Quantity change</small>
+          <strong className={onHand < record.on_hand ? "amount-loss" : ""}>{onHand > record.on_hand ? "+" : ""}{num(onHand - record.on_hand)} {unit}</strong></div>}
       <div><small><CircleDollarSign size={14} /> {grossPerUnit !== null && grossPerUnit < 0 ? "Gross loss per unit" : "Gross profit per unit"}</small><strong className={grossPerUnit !== null && grossPerUnit < 0 ? "amount-loss" : ""}>{grossPerUnit === null ? "—" : money(grossPerUnit)}</strong></div>
     </div>
     <div className="form-grid">
@@ -490,9 +499,24 @@ export function CartForm({ data, mode, quote, close, save }: FormProps & { mode:
 }
 
 export function StockForm({ data, product, close, save }: FormProps & { product?: Product }) {
-  return <Form close={close} label="Record adjustment" onSave={f=>save({action:"stock",productId:v(f,"productId"),delta:n(f,"delta"),reason:v(f,"reason")},"Stock updated")}>
-    <Field label="Product"><Select name="productId" defaultValue={product?.id ?? ""} required>{blank}<PeopleOptions people={data.products.filter(p=>p.type==="Stocked")} /></Select></Field>
-    <Field label="Quantity change" hint="Use a positive number to add units or a negative number to remove them."><input name="delta" type="number" min="-100000" max="100000" required /></Field>
+  const stocked = data.products.filter(p=>p.type==="Stocked")
+  const known = product ?? (stocked.length===1 ? stocked[0] : undefined)
+  const [productId,setProductId] = useState(known?.id ?? "")
+  const [count,setCount] = useState<number | null>(null)
+  const chosen = stocked.find(p=>p.id===productId)
+  const delta = chosen && count !== null ? count - chosen.on_hand : null
+  return <Form close={close} label="Save counted stock" onSave={f=>{
+    if (!chosen) throw new Error("Choose the product you counted.")
+    if (delta === null) throw new Error("Enter the quantity you counted in the shop.")
+    if (delta === 0) throw new Error(`${chosen.name} already shows ${num(chosen.on_hand)} ${chosen.unit}. Change the count to record an adjustment.`)
+    return save({action:"stock",productId:chosen.id,delta,reason:v(f,"reason")},"Stock updated")
+  }}>
+    <Field label="Product"><Select name="productId" value={productId} onChange={event=>{ setProductId(event.target.value); setCount(null) }} required>{blank}
+      {stocked.map(p=><option key={p.id} value={p.id}>{p.name} · {p.sku} · {num(p.on_hand)} {p.unit} on hand</option>)}</Select></Field>
+    <Field label="Counted quantity" hint={chosen ? `Recorded now: ${num(chosen.on_hand)} ${chosen.unit}. Type the number you counted; the difference is added to the stock history.` : "Choose a product to see the quantity recorded now."}>
+      <input name="count" type="number" inputMode="numeric" min="0" max="100000" value={count ?? ""} disabled={!chosen}
+        onChange={event=>setCount(event.target.value === "" ? null : event.target.valueAsNumber)} required /></Field>
+    {chosen && delta !== null && delta !== 0 && <p className="checkout-hint">{delta > 0 ? "Adding " + num(delta) : "Removing " + num(-delta)} {chosen.unit} · {num(chosen.on_hand)} → {num(count!)}</p>}
     <Field label="Reason"><input name="reason" required placeholder="Stock count, damaged item, or correction" /></Field>
   </Form>
 }
