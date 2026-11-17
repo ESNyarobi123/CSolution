@@ -175,12 +175,14 @@ Script hiyo inafanya `git pull`, inajenga images upya, inatumia migrations mpya 
 
 ## Picha za bidhaa kwa mkupuo
 
-Kila bidhaa inaweza kuwa na picha kadhaa; ya kwanza (position 0) ni cover inayoonekana kwenye orodha, invoice na CSbot. Weka picha kwenye folder moja ukiipa jina la SKU ya bidhaa, kisha:
+Kila bidhaa inaweza kuwa na picha kadhaa; ya kwanza (position 0) ni cover inayoonekana kwenye orodha, invoice na CSbot. Weka picha kwenye folder `photos/` (script huunda folder yenyewe mara ya kwanza), kisha:
 
 ```sh
 npm run photos ./photos             # onyesha tu kitakachotokea
 npm run photos ./photos -- --apply  # hifadhi kwenye database
 ```
+
+Ukikosa majina ya faili, script inaorodhesha SKU zote za bidhaa zilizopo.
 
 Mfano: `OMD-EAP225.jpg` huenda kwa bidhaa yenye SKU `OMD-EAP225`. Jina kamili la bidhaa pia linakubalika (`Omada EAP225.webp`). Faili lazima ziwe JPEG, PNG au WebP chini ya 3 MB. Picha zilizopo tayari huongezwa kwenye gallery bila kubadilisha cover.
 

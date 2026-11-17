@@ -8,7 +8,7 @@
 // images table and linked through product_images, so CSbot and the dashboard
 // pick them up immediately without a deploy.
 import { randomUUID } from "node:crypto"
-import { readdir, readFile, stat } from "node:fs/promises"
+import { mkdir, readdir, readFile, stat } from "node:fs/promises"
 import { basename, extname, join } from "node:path"
 import pg from "pg"
 
@@ -30,17 +30,33 @@ function contentType(data) {
 // SKUs differ only by separators, so CAT6CAB and CAB-CAT6 should still match.
 const normalize = value => value.toLowerCase().replace(/[^a-z0-9]/g, "")
 
+/** Shows the exact file names this folder should contain, so filling it is copy-paste work. */
+function expected(products) {
+  console.log(`\nName each file after the product SKU (JPEG, PNG or WebP, under 3 MB):`)
+  for (const item of products) console.log(`  ${item.sku}.jpg   -> ${item.name}`)
+  console.log(`\nThen run: npm run photos ${directory} -- --apply`)
+}
+
 async function main() {
-  const files = (await readdir(directory, { withFileTypes: true }))
-    .filter(entry => entry.isFile() && [".jpg", ".jpeg", ".png", ".webp"].includes(extname(entry.name).toLowerCase()))
-  if (!files.length) {
-    console.log(`No JPEG, PNG or WebP files found in ${directory}`)
-    console.log("Name each file after the product SKU, e.g. OMD-EAP225.jpg")
-    return
+  let files = []
+  try {
+    files = (await readdir(directory, { withFileTypes: true }))
+      .filter(entry => entry.isFile() && [".jpg", ".jpeg", ".png", ".webp"].includes(extname(entry.name).toLowerCase()))
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error
+    // A missing folder is the normal first run, not an error worth a stack trace.
+    await mkdir(directory, { recursive: true })
+    console.log(`Created ${directory}. Put product photos in it, then run this command again.`)
   }
 
   const { rows: products } = await pool.query(
     "SELECT id,sku,name FROM products WHERE active ORDER BY name")
+  if (!files.length) {
+    console.log(`\nNo JPEG, PNG or WebP files found in ${directory} yet.`)
+    expected(products)
+    return
+  }
+
   const bySku = new Map(products.map(item => [normalize(item.sku), item]))
   const byName = new Map(products.map(item => [normalize(item.name), item]))
 
