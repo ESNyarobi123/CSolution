@@ -28,11 +28,12 @@ export function Empty({ title = "No records yet", description, icon: Icon = Box 
   return <div className="empty"><span><Icon size={22} /></span><strong>{title}</strong>{description && <p>{description}</p>}</div>
 }
 
-export function ProductPhoto({ product, large = false }: { product: Product; large?: boolean }) {
+export function ProductPhoto({ product, large = false, url }: { product: Product; large?: boolean; url?: string }) {
   const [broken,setBroken] = useState<string | null>(null)
+  const source = url ?? product.image_url
   return <span className={large ? "product-photo" : "product-thumb"}>
-    {product.image_url && product.image_url !== broken ?
-      <img src={product.image_url} alt={large ? product.name : ""} referrerPolicy="no-referrer" onError={()=>setBroken(product.image_url)} /> :
+    {source && source !== broken ?
+      <img src={source} alt={large ? product.name : ""} referrerPolicy="no-referrer" onError={()=>setBroken(source)} /> :
       <Box size={large ? 32 : 18} aria-hidden="true" />}
   </span>
 }
