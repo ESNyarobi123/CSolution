@@ -141,8 +141,10 @@ export async function getCsbotProduct(id: string) {
 
 export async function countCsbotProducts() {
   const item = await first<{ total: number; images: number }>(pool,
+    // Only photos linked to a live product matter; orphan uploads are ignored.
     `SELECT (SELECT count(*) FROM products WHERE active)::int AS total,
-      (SELECT count(*) FROM product_images)::int AS images`)
+      (SELECT count(DISTINCT pi.url) FROM product_images pi
+        JOIN products p ON p.id=pi.product_id WHERE p.active)::int AS images`)
   return item ?? { total: 0, images: 0 }
 }
 
