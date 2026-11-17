@@ -173,6 +173,18 @@ cd /opt/csolution && ./scripts/deploy.sh
 
 Script hiyo inafanya `git pull`, inajenga images upya, inatumia migrations mpya na kurestart app. Database container haiathiriki.
 
-## Tovuti iliyopandishwa
+## Picha za bidhaa kwa mkupuo
 
+Kila bidhaa inaweza kuwa na picha kadhaa; ya kwanza (position 0) ni cover inayoonekana kwenye orodha, invoice na CSbot. Weka picha kwenye folder moja ukiipa jina la SKU ya bidhaa, kisha:
+
+```sh
+npm run photos ./photos             # onyesha tu kitakachotokea
+npm run photos ./photos -- --apply  # hifadhi kwenye database
+```
+
+Mfano: `OMD-EAP225.jpg` huenda kwa bidhaa yenye SKU `OMD-EAP225`. Jina kamili la bidhaa pia linakubalika (`Omada EAP225.webp`). Faili lazima ziwe JPEG, PNG au WebP chini ya 3 MB. Picha zilizopo tayari huongezwa kwenye gallery bila kubadilisha cover.
+
+Bidhaa isiyo na picha huonekana kama boksi kwenye CSbot, na CSbot humwambia mteja picha haipatikani badala ya kutuma picha isiyo sahihi.
+
+## Tovuti iliyopandishwa
 `https://csolution.yunigo.online` inaendesha kwenye server ya `139.84.245.9` kupitia Caddy. App na database zinaendesha kama containers za Docker zenye `restart: unless-stopped`, na Docker/Caddy zinaanza wenyewe server ikirestart.

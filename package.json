@@ -9,7 +9,8 @@
     "db:setup": "node --env-file-if-exists=.env scripts/setup.mjs",
     "staff:create": "node --env-file-if-exists=.env scripts/create-staff.mjs",
     "db:local": "bash scripts/local-db.sh",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "photos": "node --env-file-if-exists=.env scripts/attach-photos.mjs"
   },
   "type": "module",
   "dependencies": {
