@@ -39,6 +39,8 @@ services:
       CSOLUTION_ADMIN_EMAIL: ${CSOLUTION_ADMIN_EMAIL:?set CSOLUTION_ADMIN_EMAIL in .env}
       CSOLUTION_ADMIN_PASSWORD: ${CSOLUTION_ADMIN_PASSWORD:?set CSOLUTION_ADMIN_PASSWORD in .env}
       CSOLUTION_DEMO: ${CSOLUTION_DEMO:-0}
+      # CSbot reads prices and photos from /api/csbot using this shared token.
+      CSBOT_CATALOG_TOKEN: ${CSBOT_CATALOG_TOKEN:-}
       TZ: Africa/Dar_es_Salaam
     ports:
       - "127.0.0.1:${APP_PORT:-3085}:3085"
