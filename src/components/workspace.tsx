@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useEffectEvent, useRef, useState } from "react"
-import { Archive, ArchiveRestore, ArrowRight, BadgeCheck, Bell, Box, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronRight, CircleDollarSign, ClipboardCheck, CreditCard, FileText, LayoutDashboard, Layers3, LogOut, Menu, PackageOpen, Plus, RadioTower, ReceiptText, RefreshCw, Search, Settings2, Store, Trash2, Truck, UserCheck, UserPlus, Users, UserX, Wallet, X, type LucideIcon } from "lucide-react"
+import { Archive, ArchiveRestore, ArrowRight, BadgeCheck, Bell, Box, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronRight, CircleDollarSign, ClipboardCheck, CreditCard, FileText, LayoutDashboard, Layers3, LogOut, Menu, PackageOpen, PenLine, Plus, RadioTower, ReceiptText, RefreshCw, Search, Settings2, Store, Trash2, Truck, UserCheck, UserPlus, Users, UserX, Wallet, X, type LucideIcon } from "lucide-react"
 import { can, ownSalesOnly, type Capability, type Role } from "@/lib/access"
 import { deletableRecords } from "@/lib/management"
 import { date, initials, money, num, RequestError, requestJSON } from "@/lib/format"
@@ -9,7 +9,7 @@ import type { JobDetail, SaleDetail, Snapshot } from "@/lib/model"
 import { maxReportDays, rangeDays, type ReportPeriod } from "@/lib/report-period"
 import { Dashboard } from "./dashboard"
 import { QuoteDocument, SaleDocument } from "./documents"
-import { CartForm, ContactForm, ExpenseForm, GroupForm, InstallationRequestForm, InstallationTypeForm, JobForm, JobStatusForm, MaterialForm, PaymentForm, ProductForm, PurchaseForm, PurchaseReferenceForm, ReturnForm, SettingsForm, StaffForm, StockForm, type Save } from "./forms"
+import { CartForm, ContactForm, ExpenseForm, GroupForm, InstallationRequestForm, InstallationTypeForm, JobForm, JobStatusForm, MaterialForm, PaymentForm, ProductForm, PurchaseForm, PurchaseReferenceForm, ReturnForm, SaleEditForm, SettingsForm, StaffForm, StockForm, type Save } from "./forms"
 import { ApprovalDetail, Approvals, FrontOfficeDashboard } from "./front-office"
 import { Analytics, CustomerDetail, Customers, Documents, Expenses, Groups, Installations, Inventory, ProductDetail, Products, Sales, Settings, Suppliers, type Panel } from "./screens"
 import { ActionMenu, Badge, Brand, Empty, ErrorLine, Field, Form, Modal, SearchBox, Select, Table } from "./ui"
@@ -187,7 +187,7 @@ export function Workspace({ initial }: { initial: Snapshot }) {
       throw error
     }
     const refreshResult = await refresh().catch(e=>{ setError(e instanceof Error ? e.message : "Refresh the page to see the saved change.");return undefined })
-    if (action==="requestSaleApproval" || action==="requestReturnApproval") go("approvals")
+    if (action==="requestSaleApproval" || action==="requestReturnApproval" || (action==="editSale" && result.pending)) go("approvals")
     if (panel?.kind==="quote" && page.split("/")[0]==="documents" && refreshResult?.quotes.some(quote=>quote.id===result.id)) {
       setPage("documents/quotations")
       history.replaceState(null,"","#documents/quotations")
@@ -195,6 +195,7 @@ export function Workspace({ initial }: { initial: Snapshot }) {
     setPanel(current=>{
       if (!current || current!==panel) return current
       if (action==="reviewApproval" && result.saleId) return {kind:"saleDetail",id:result.saleId}
+      if (action==="editSale" && result.id && !result.pending) return {kind:"saleDetail",id:result.id}
       if (action==="completeApprovedSale" && result.id) return {kind:"saleDetail",id:result.id}
       if (current.kind==="sale" && result.id) return {kind:"saleDetail",id:result.id}
       if (current.kind==="quote") {
@@ -346,7 +347,7 @@ function WorkspaceModal({ panel, close, open, go, formProps }: {
       <InstallationTypeForm {...formProps} record={panel.record} />)
     case "approvalDetail": {
       const approval = data.approvals.find(item=>item.id===panel.id)
-      return modal(approval?.kind==="Return" ? "Return approval" : "Sale terms approval",approval ?
+      return modal(approval?.kind==="Return" ? "Return approval" : approval?.kind==="Sale edit" ? "Sale edit approval" : "Sale terms approval",approval ?
         <ApprovalDetail {...formProps} approval={approval} open={open} /> : <Empty title="Approval request could not be found" />,true)
     }
     case "expense": return modal(panel.record ? "Edit expense" : "Record expense",<ExpenseForm {...formProps} job={panel.job} record={panel.record} />)
@@ -404,6 +405,8 @@ function WorkspaceModal({ panel, close, open, go, formProps }: {
         <QuoteDocument quote={quote} business={data.business} />
       </>,true)
     }
+    case "editSale": return modal("Edit sale",
+      <LoadDetail<SaleDetail> type="sale" id={panel.id}>{detail=><SaleEditForm {...formProps} detail={detail} />}</LoadDetail>,true)
     case "saleDetail":
     case "invoice":
     case "receipt":
@@ -457,6 +460,7 @@ function SaleView({ detail,data,open }: { detail:SaleDetail;data:Snapshot;open:(
   const s=detail.sale
   const showNegotiation = can(data.user.role,"pricing")
   const grossProfit = s.net_cost === undefined ? null : s.net_revenue - s.net_cost
+  const pendingEdit = data.approvals.find(approval=>approval.kind==="Sale edit" && approval.status==="Pending" && approval.summary.saleNumber===s.number)
   return <div className="stack">
     <div className="record-title"><div><h3>{s.number} · {s.customer_name}</h3><p>{s.buyer_type} · {s.kind} · {date(s.created_at)} · {s.cashier}</p></div><Badge value={s.status} /></div>
     <div className="detail-summary">
@@ -469,8 +473,11 @@ function SaleView({ detail,data,open }: { detail:SaleDetail;data:Snapshot;open:(
       <div><small>Cost of items</small><strong>{money(s.net_cost ?? 0)}</strong></div>
       <div><small>{grossProfit < 0 ? "Gross loss" : "Gross profit"}</small><strong className={grossProfit < 0 ? "amount-loss" : ""}>{money(grossProfit)}</strong></div>
     </div>}
+    {pendingEdit && <p className="checkout-hint">An edit to this sale is waiting for administrator approval.</p>}
     <div className="detail-actions">
       <button className="button secondary small" onClick={()=>open({kind:"invoice",id:s.id})}><FileText size={16} /> View invoice</button>
+      {(can(data.user.role,"pricing")||can(data.user.role,"requestApprovals"))&&
+        <button className="button secondary small" onClick={()=>open({kind:"editSale",id:s.id})}><PenLine size={16} /> Edit sale</button>}
       {s.paid>0&&<button className="button secondary small" onClick={()=>open({kind:"receipt",id:s.id})}><ReceiptText size={16} /> View receipt</button>}
       {s.balance>0&&<button className="button primary small" onClick={()=>open({kind:"payment",id:s.id})}><Plus size={16} /> Record payment</button>}
       {(can(data.user.role,"pricing")||can(data.user.role,"requestApprovals"))&&detail.lines.some(line=>line.returned<line.quantity)&&

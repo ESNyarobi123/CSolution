@@ -46,10 +46,11 @@ export type Breakdown = { name: string; product_id: string | null; sku: string |
 export type ApprovalSummary = {
   buyer: string; total: number; paid: number; discount: number; method?: typeof methods[number];
   dueDate?: string | null; soldOn?: string | null; saleNumber?: string; refund?: number; credit?: number; restock?: boolean;
+  previousTotal?: number; previousBuyer?: string; balance?: number;
   items: { name: string; quantity: number; price: number; listPrice?: number; note?: string }[]
 }
 export type Approval = {
-  id: string; kind: "Sale terms" | "Return"; status: "Pending" | "Approved" | "Rejected" | "Completed";
+  id: string; kind: "Sale terms" | "Return" | "Sale edit"; status: "Pending" | "Approved" | "Rejected" | "Completed";
   requester: string; reason: string; reviewer: string | null; review_note: string; reviewed_at: string | null;
   created_at: string; result_sale_id: string | null; summary: ApprovalSummary
 }

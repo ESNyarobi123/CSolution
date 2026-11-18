@@ -30,6 +30,14 @@ const saleInput = z.object({ action: z.literal("sale"), ...cart, requestId: id, 
   method: z.enum(methods), reference: text, dueDate: day.nullable(), soldOn: day.nullable().optional(),
   installation: z.object({ title: name, location: text, technicianId: id.nullable(), scheduled: day.nullable(), services: installationSelection }).optional() })
 const returnInput = z.object({ action: z.literal("return"), requestId: id, saleId: id, lineId: id, quantity, restock: z.boolean(), reason: name })
+const editSaleInput = z.object({
+  action: z.literal("editSale"), saleId: id, requestId: id, reason: z.string().trim().max(300).default(""),
+  customerId: id.nullable(), buyerType: z.enum(buyerTypes).optional(), newBuyer: z.object({ name }).optional(),
+  lines: z.array(z.object({
+    lineId: id.optional(), productId: id, quantity, price: amount, serial: z.string().trim().max(100).default("")
+  })).min(1).max(100),
+  discount: amount.default(0), expectedTotal: transactionAmount.optional()
+})
 const schema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("group"), kind: z.enum(["categories", "brands"]), id: id.optional(), name, description: text }),
   z.object({ action: z.literal("product"), id: id.optional(), name, sku: z.string().trim().min(1).max(60),
@@ -51,6 +59,7 @@ const schema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("requestReturnApproval"), item: returnInput }),
   z.object({ action: z.literal("reviewApproval"), id, decision: z.enum(["approve","reject"]), note: text, recordSale: z.boolean().optional() }),
   z.object({ action: z.literal("completeApprovedSale"), id }),
+  editSaleInput,
   z.object({ action: z.literal("job"), id: id.optional(), title: name, customerId: id.nullable(), saleId: id.nullable(),
     technicianId: id.nullable(), location: text, notes: text, scheduled: day.nullable(), status: z.enum(jobStatuses), services: installationSelection }),
   z.object({ action: z.literal("installationRequest"), title: name, customerId: id.nullable(), saleId: id.nullable(),
@@ -76,6 +85,7 @@ const rules: Record<Action["action"], Capability> = {
   group: "catalog", product: "catalog", customer: "customers", supplier: "inventory", stock: "inventory", purchase: "inventory",
   sale: "sales", quote: "sales", payment: "sales", return: "pricing", job: "jobs", jobStatus: "jobs", material: "jobs",
   requestSaleApproval: "requestApprovals", requestReturnApproval: "requestApprovals", reviewApproval: "reviewApprovals", completeApprovedSale: "requestApprovals",
+  editSale: "pricing",
   installationRequest: "requestJobs", installationType: "scheduleJobs", expense: "reports", settings: "admin", staff: "admin",
   purchaseReference: "admin", productStatus: "admin", staffStatus: "admin", deleteRecord: "admin"
 }
@@ -416,6 +426,180 @@ async function recordReturn(db: Client, user: User, input: z.infer<typeof return
   return { id:input.saleId,refund,summary }
 }
 
+async function serialInUse(db: Client, productId: string, serial: string, exceptLineIds: string[]) {
+  return first(db, `SELECT l.id FROM sale_items l
+    WHERE l.product_id=$1 AND l.serial<>'' AND lower(l.serial)=lower($2) AND NOT (l.id = ANY($3::uuid[]))
+    AND NOT EXISTS (SELECT 1 FROM returns r WHERE r.sale_item_id=l.id AND r.restock)
+    UNION ALL
+    SELECT i.id FROM installation_items i WHERE i.product_id=$1 AND i.serial<>'' AND lower(i.serial)=lower($2)
+    LIMIT 1`, [productId, serial, exceptLineIds])
+}
+
+async function editSale(db: Client, user: User, input: z.infer<typeof editSaleInput>, options?: { request?: boolean; exceptApprovalId?: string }) {
+  const direct = can(user.role, "pricing")
+  if (!direct && !options?.request) throw new ShopError("A sale edit needs administrator approval.", 403)
+  if (options?.request && !input.reason) throw new ShopError("Write why this sale needs to change.")
+  const sale = required(await first<{
+    id: string; number: string; customer_id: string | null; customer_name: string; buyer_type: BuyerType;
+    discount: number; tax: number; total: number; sold_on: string
+  }>(db, `SELECT id,number,customer_id,customer_name,buyer_type,discount,tax,total,
+    (created_at AT TIME ZONE 'Africa/Dar_es_Salaam')::date::text AS sold_on
+    FROM sales WHERE id=$1 AND ($2::uuid IS NULL OR cashier_id=$2) FOR UPDATE`,
+    [input.saleId, ownSalesOnly(user.role) ? user.id : null]), "Sale could not be found.")
+  const duplicate = await first(db, "SELECT requested_by,kind FROM approval_requests WHERE id=$1", [input.requestId])
+  const sameRequest = options?.exceptApprovalId?.toLowerCase() === input.requestId.toLowerCase()
+  if (duplicate && !sameRequest) {
+    if (duplicate.requested_by !== user.id || duplicate.kind !== "Sale edit") throw new ShopError("This edit request is already in use.", 409)
+    return { id: input.requestId, pending: true }
+  }
+  const waiting = await first(db, `SELECT id FROM approval_requests
+    WHERE kind='Sale edit' AND status='Pending' AND payload->>'saleId'=$1 AND ($2::uuid IS NULL OR id<>$2) LIMIT 1`,
+    [sale.id, options?.exceptApprovalId ?? null])
+  if (waiting) throw new ShopError("This sale already has an edit waiting for approval.", 409)
+
+  const existing = await rows<{
+    id: string; product_id: string; name: string; quantity: number; price: number; cost: number; type: string; serial: string;
+    unit: string; list_price: number | null; negotiation_note: string
+  }>(db, `SELECT id,product_id,name,quantity,price,cost,type,serial,unit,list_price,negotiation_note
+    FROM sale_items WHERE sale_id=$1 ORDER BY id FOR UPDATE`, [sale.id])
+  const returnedRows = await rows<{ sale_item_id: string; returned: number }>(db,
+    "SELECT sale_item_id,COALESCE(sum(quantity),0) AS returned FROM returns WHERE sale_item_id=ANY($1::uuid[]) GROUP BY sale_item_id",
+    [existing.map(line => line.id)])
+  const returned = new Map(returnedRows.map(row => [row.sale_item_id, row.returned]))
+  const prior = new Map(existing.map(line => [line.id, line]))
+  const seen = new Set<string>()
+  for (const line of input.lines) {
+    if (!line.lineId) continue
+    if (seen.has(line.lineId)) throw new ShopError("A sale line is listed twice.")
+    seen.add(line.lineId)
+    const current = prior.get(line.lineId)
+    if (!current || current.product_id !== line.productId) throw new ShopError("A sale line could not be found.", 404)
+    const alreadyReturned = returned.get(line.lineId) ?? 0
+    if (line.quantity < alreadyReturned) throw new ShopError(`${current.name} cannot go below the ${alreadyReturned} already returned.`, 409)
+  }
+  for (const line of existing) {
+    if ((returned.get(line.id) ?? 0) > 0 && !seen.has(line.id)) {
+      throw new ShopError(`${line.name} has a return, so it has to stay on this sale.`, 409)
+    }
+  }
+  const productIds = [...new Set([...existing.map(line => line.product_id), ...input.lines.map(line => line.productId)])].sort()
+  const products = await rows<Product>(db, "SELECT * FROM products WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE", [productIds])
+  const byId = new Map(products.map(product => [product.id, product]))
+  const customer = await checkoutBuyer(db, user, {
+    action: "sale", customerId: input.customerId, buyerType: input.buyerType, newBuyer: input.newBuyer, lines: input.lines,
+    discount: input.discount, tax: sale.tax, expectedTotal: input.expectedTotal, requestId: input.requestId,
+    paid: 0, method: "Cash", reference: "", dueDate: null
+  }, options?.request)
+  const serials = new Set<string>()
+  const items = input.lines.map(line => {
+    const product = required(byId.get(line.productId), "An item is no longer available.")
+    const current = line.lineId ? prior.get(line.lineId) : undefined
+    if (!current && !product.active) throw new ShopError(`${product.name} is no longer available.`)
+    if (line.serial && (product.type !== "Stocked" || line.quantity !== 1)) {
+      throw new ShopError("A serial number can only be entered for a single stocked unit.")
+    }
+    if (line.serial) {
+      const key = line.productId + ":" + line.serial.toLowerCase()
+      if (serials.has(key)) throw new ShopError(`Serial ${line.serial} appears twice in this sale.`, 409)
+      serials.add(key)
+    }
+    const usual = customer.buyerType === "Agent" ? (product.agent_price ?? product.price) : product.price
+    const priceChanged = !current || current.price !== line.price
+    return {
+      ...line, product, current, usual,
+      listPrice: !priceChanged ? current.list_price : line.price < usual ? usual : null,
+      note: !priceChanged ? current.negotiation_note : line.price < usual ? "Edited price" : ""
+    }
+  })
+  for (const item of items) {
+    if (item.serial && await serialInUse(db, item.productId, item.serial, existing.map(line => line.id))) {
+      throw new ShopError(`Serial ${item.serial} is already recorded as sold or installed.`, 409)
+    }
+  }
+  const subtotal = items.reduce((sum, item) => sum + item.quantity * item.price, 0)
+  const cost = items.reduce((sum, item) => sum + item.quantity * (item.current?.cost ?? item.product.cost ?? 0), 0)
+  if (input.discount > subtotal) throw new ShopError("Discount cannot exceed the subtotal.")
+  const total = subtotal - input.discount + sale.tax
+  if (Math.max(subtotal, total, cost) >= 1e14) throw new ShopError("Transaction total exceeds the supported limit.")
+  if (input.expectedTotal !== undefined && input.expectedTotal !== total) {
+    throw new ShopError("The total changed. Review the updated items before saving.", 409)
+  }
+  const moneyTaken = await first<{ paid: number; credits: number; refunds: number }>(db, `SELECT
+    COALESCE((SELECT sum(amount) FROM payments WHERE sale_id=$1),0) AS paid,
+    COALESCE((SELECT sum(r.credit) FROM returns r JOIN sale_items l ON l.id=r.sale_item_id WHERE l.sale_id=$1),0) AS credits,
+    COALESCE((SELECT sum(r.refund) FROM returns r JOIN sale_items l ON l.id=r.sale_item_id WHERE l.sale_id=$1),0) AS refunds`, [sale.id])
+  const netPaid = (moneyTaken?.paid ?? 0) - (moneyTaken?.refunds ?? 0)
+  const credits = moneyTaken?.credits ?? 0
+  if (total < netPaid + credits) {
+    throw new ShopError("The new total is below the amount already paid or credited. Record a return when the customer should receive money back.", 409)
+  }
+  if (total > netPaid + credits && !customer.id) throw new ShopError("Choose a customer for the remaining balance.")
+  const oldStock = new Map<string, number>()
+  for (const line of existing) if (line.type === "Stocked") oldStock.set(line.product_id, (oldStock.get(line.product_id) ?? 0) + line.quantity)
+  const newStock = new Map<string, number>()
+  for (const item of items) if (item.product.type === "Stocked") newStock.set(item.productId, (newStock.get(item.productId) ?? 0) + item.quantity)
+  for (const [productId, quantity] of newStock) {
+    const extra = quantity - (oldStock.get(productId) ?? 0)
+    const product = byId.get(productId)
+    if (extra > 0 && (!product || extra > product.on_hand)) {
+      throw new ShopError(`${product?.name ?? "A product"} has only ${product?.on_hand ?? 0} ${product?.unit ?? "units"} available.`, 409)
+    }
+  }
+  const sameLines = input.lines.length === existing.length && items.every(item => item.current &&
+    item.current.quantity === item.quantity && item.current.price === item.price && (item.current.serial || "") === item.serial)
+  const unchanged = sameLines && input.discount === sale.discount && customer.id === sale.customer_id &&
+    customer.name === sale.customer_name && customer.buyerType === sale.buyer_type
+  if (unchanged) throw new ShopError("Nothing on this sale changed.")
+  const summary: ApprovalSummary = {
+    buyer: customer.name, previousBuyer: sale.customer_name, saleNumber: sale.number, soldOn: sale.sold_on,
+    total, previousTotal: sale.total, discount: input.discount, paid: netPaid, balance: total - credits - netPaid,
+    items: items.map(item => item.price === item.usual ? { name: item.product.name, quantity: item.quantity, price: item.price } :
+      { name: item.product.name, quantity: item.quantity, price: item.price, listPrice: item.usual, ...(item.note ? { note: item.note } : {}) })
+  }
+  if (options?.request) {
+    await db.query("INSERT INTO approval_requests (id,kind,requested_by,reason,payload,summary) VALUES ($1,'Sale edit',$2,$3,$4,$5)",
+      [input.requestId, user.id, input.reason, JSON.stringify(input), JSON.stringify(summary)])
+    await audit(db, user, "Approval requested", "Sale edit · " + sale.number)
+    return { id: input.requestId, pending: true }
+  }
+  const kept = items.flatMap(item => item.lineId ? [item.lineId] : [])
+  await db.query("DELETE FROM sale_items WHERE sale_id=$1 AND NOT (id = ANY($2::uuid[]))", [sale.id, kept])
+  for (const item of items) {
+    if (!item.lineId) continue
+    await db.query(`UPDATE sale_items SET quantity=$2,price=$3,serial=$4,list_price=$5,negotiation_note=$6 WHERE id=$1`,
+      [item.lineId, item.quantity, item.price, item.serial, item.listPrice, item.note])
+  }
+  for (const item of items) {
+    if (item.lineId) continue
+    await db.query(`INSERT INTO sale_items (sale_id,product_id,name,quantity,price,cost,type,serial,unit,warranty_until,list_price,negotiation_note)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,CASE WHEN $10::integer>0 THEN (($11::date + make_interval(months=>$10::integer))::date) END,$12,$13)`,
+      [sale.id, item.productId, item.product.name, item.quantity, item.price, item.product.cost, item.product.type, item.serial, item.product.unit,
+        item.product.warranty, sale.sold_on, item.listPrice, item.note])
+  }
+  for (const productId of new Set([...oldStock.keys(), ...newStock.keys()])) {
+    await moveStock(db, user, productId, (oldStock.get(productId) ?? 0) - (newStock.get(productId) ?? 0), "Sale edit", sale.number)
+  }
+  const hasJob = await first(db, "SELECT id FROM installations WHERE sale_id=$1", [sale.id])
+  const serviceOnly = items.every(item => item.product.type === "Service")
+  const kind = serviceOnly ? "Service only" : items.some(item => item.product.type === "Service") || hasJob ? "Equipment + installation" : "Equipment"
+  await db.query(`UPDATE sales SET customer_id=$2,customer_name=$3,customer_address=$4,customer_phone=$5,buyer_type=$6,
+    kind=$7,subtotal=$8,discount=$9,total=$10,cost=$11 WHERE id=$1`,
+    [sale.id, customer.id, customer.name, customer.address, customer.phone, customer.buyerType, kind, subtotal, input.discount, total, cost])
+  const services = items.filter(item => item.product.installation)
+    .filter((item, index, list) => list.findIndex(other => other.productId === item.productId) === index)
+    .map(item => ({ product_id: item.productId, name: item.product.name, price: item.price }))
+  const hadInstallation = existing.some(line => byId.get(line.product_id)?.installation)
+  if (hadInstallation || services.length) {
+    await db.query("UPDATE installations SET customer_id=$2,services=$3 WHERE sale_id=$1", [sale.id, customer.id, JSON.stringify(services)])
+  } else {
+    await db.query("UPDATE installations SET customer_id=$2 WHERE sale_id=$1", [sale.id, customer.id])
+  }
+  const moneyText = (value: number) => "TZS " + value.toLocaleString("en-US")
+  await audit(db, user, "Sale edited", `${sale.number} · ${moneyText(sale.total)} → ${moneyText(total)} · ${customer.name}` +
+    (input.reason ? " · " + input.reason : ""))
+  return { id: sale.id }
+}
+
 async function requestApproval(db: Client, user: User, input: Extract<Action, { action:"requestSaleApproval"|"requestReturnApproval" }>) {
   const payload = input.action==="requestSaleApproval" ? input.sale : input.item
   const kind = input.action==="requestSaleApproval" ? "Sale terms" : "Return"
@@ -434,7 +618,7 @@ async function requestApproval(db: Client, user: User, input: Extract<Action, { 
 }
 
 type LockedApproval = {
-  id: string; requested_by: string; kind: "Sale terms" | "Return"; status: string;
+  id: string; requested_by: string; kind: "Sale terms" | "Return" | "Sale edit"; status: string;
   payload: unknown; summary: ApprovalSummary; result_sale_id: string | null
 }
 
@@ -455,14 +639,20 @@ async function reviewApproval(db: Client, user: User, input: Extract<Action, { a
   if (approval.status!=="Pending") throw new ShopError("This request has already been reviewed.",409)
   let status = input.decision==="reject" ? "Rejected" : "Approved"
   let result: { id:string; refund:number } | undefined
+  let editedSaleId: string | undefined
   if (status==="Approved" && approval.kind==="Return") {
     result = await recordReturn(db,user,returnInput.parse(approval.payload),false,approval.summary)
     status = "Completed"
   }
+  if (status==="Approved" && approval.kind==="Sale edit") {
+    const edited = await editSale(db,user,editSaleInput.parse(approval.payload),{ exceptApprovalId: approval.id })
+    status = "Completed"
+    editedSaleId = edited.id
+  }
   await db.query(`UPDATE approval_requests SET status=$2,reviewed_by=$3,review_note=$4,reviewed_at=now(),result_sale_id=$5 WHERE id=$1`,
-    [input.id,status,user.id,input.note,result?.id ?? null])
+    [input.id,status,user.id,input.note,result?.id ?? editedSaleId ?? null])
   await audit(db,user,input.decision==="reject" ? "Approval rejected" : "Approval granted",approval.kind+" · "+input.id)
-  return { id:input.id,refund:result?.refund }
+  return { id:input.id,refund:result?.refund,saleId:editedSaleId }
 }
 
 async function completeApprovedSale(db: Client, user: User, approvalId: string) {
@@ -493,7 +683,8 @@ export async function changeShop(raw: unknown, user: User) {
     throw new ShopError(issue.path.join(" · ") + " — " + issue.message)
   }
   const input = parsed.data
-  if (!can(user.role,rules[input.action]) && !(input.action==="completeApprovedSale" && can(user.role,"reviewApprovals"))) {
+  if (!can(user.role,rules[input.action]) && !(input.action==="completeApprovedSale" && can(user.role,"reviewApprovals")) &&
+      !(input.action==="editSale" && can(user.role,"requestApprovals"))) {
     throw new ShopError("You do not have permission for this action.",403)
   }
   if ((input.action === "quote" || input.action === "expense") && input.id && !can(user.role,"admin")) {
@@ -676,6 +867,8 @@ export async function changeShop(raw: unknown, user: User) {
         return reviewApproval(db,user,input)
       case "completeApprovedSale":
         return completeApprovedSale(db,user,input.id)
+      case "editSale":
+        return editSale(db,user,input,{ request: !can(user.role,"pricing") })
       case "payment": {
         const sale = required(await first(db,saleSummary + " WHERE s.id=$1",[input.saleId]),"Sale could not be found.")
         if (input.amount > sale.balance) throw new ShopError("Payment exceeds the outstanding balance.",409)

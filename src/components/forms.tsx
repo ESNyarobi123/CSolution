@@ -9,7 +9,7 @@ import { ErrorLine, Field, Form, Modal, numberVal as n, opt, ProductPhoto, Selec
 import { CheckoutBuyer, buyerNameKey, isBuyerAccount } from "./checkout-buyer"
 import { SaleCatalog } from "./sale-catalog"
 
-export type Save = (data: object, message?: string) => Promise<{ id?: string; saleId?: string; number?: string; refund?: number }>
+export type Save = (data: object, message?: string) => Promise<{ id?: string; saleId?: string; number?: string; refund?: number; pending?: boolean }>
 type FormProps = { data: Snapshot; close: () => void; save: Save }
 type SimpleProps = Pick<FormProps,"close"|"save">
 const blank = <option value="">Select…</option>
@@ -715,6 +715,162 @@ export function StaffForm({ record, close, save }: SimpleProps & { record?: Staf
       </Field>
     </div>
     <label className="checkbox"><input type="checkbox" name="active" defaultChecked={record?.active ?? true} /> Active staff account</label>
+  </Form>
+}
+
+type EditLine = { key: string; lineId?: string; productId: string; name: string; unit: string; quantity: number; price: number; returned: number; serial: string }
+
+export function SaleEditForm({ data, detail, close, save }: FormProps & { detail: SaleDetail }) {
+  const sale = detail.sale
+  const direct = can(data.user.role, "pricing")
+  const productMap = new Map(data.products.map(product => [product.id, product]))
+  const originalQty = new Map<string, number>()
+  for (const line of detail.lines) originalQty.set(line.product_id, (originalQty.get(line.product_id) ?? 0) + line.quantity)
+  const [buyerType, setBuyerType] = useState<BuyerType>(sale.buyer_type)
+  const [customerId, setCustomer] = useState(sale.customer_id ?? "")
+  const [buyerName, setBuyerName] = useState(sale.customer_id ? sale.customer_name : "")
+  const [discount, setDiscount] = useState(sale.discount)
+  const [reason, setReason] = useState("")
+  const [lines, setLines] = useState<EditLine[]>(() => detail.lines.map(line => ({
+    key: line.id, lineId: line.id, productId: line.product_id, name: line.name, unit: line.unit,
+    quantity: line.quantity, price: line.price, returned: line.returned, serial: line.serial
+  })))
+  const [query, setQuery] = useState("")
+  const sequence = useRef(detail.lines.length)
+  const requestId = useRef(crypto.randomUUID())
+  const buyer = data.customers.find(customer => customer.id === customerId)
+  const lookupPrice = (product?: Product) => product ? (buyerType === "Agent" ? product.agent_price ?? product.price : product.price) : 0
+  const subtotal = lines.reduce((sum, line) => sum + line.quantity * line.price, 0)
+  const total = subtotal - discount + sale.tax
+  const floor = sale.paid + sale.credits
+  const quantities = new Map<string, number>()
+  for (const line of lines) quantities.set(line.productId, (quantities.get(line.productId) ?? 0) + line.quantity)
+  const roomFor = (productId: string) => {
+    const product = productMap.get(productId)
+    const held = originalQty.get(productId) ?? 0
+    const used = quantities.get(productId) ?? 0
+    if (!product) return Math.max(0, held - used)
+    return product.type === "Stocked" ? Math.max(0, product.on_hand + held - used) : 100000 - used
+  }
+  let stockError = ""
+  for (const [productId, quantity] of quantities) {
+    const product = productMap.get(productId)
+    const held = originalQty.get(productId) ?? 0
+    if (product?.type === "Stocked" && quantity > product.on_hand + held) {
+      stockError = `${product.name} has only ${num(product.on_hand)} ${product.unit} available to add.`
+      break
+    }
+    if (!product && quantity > held) {
+      stockError = "One of the saved items is no longer available to increase."
+      break
+    }
+  }
+  const namedBuyer = buyerType !== "Walk-in"
+  const enteredName = buyerName.trim()
+  const nameKey = buyerNameKey(enteredName)
+  const matchingAccounts = namedBuyer && !customerId && nameKey ? data.customers.filter(customer =>
+    isBuyerAccount(buyerType, customer) && buyerNameKey(customer.name) === nameKey) : []
+  const ambiguousName = matchingAccounts.length > 1
+  const matchedBuyer = ambiguousName ? undefined : matchingAccounts[0]
+  const resolvedCustomerId = customerId || matchedBuyer?.id || null
+  const newBuyer = namedBuyer && !resolvedCustomerId && enteredName && !ambiguousName ? { name: enteredName } : undefined
+  const customerError = ambiguousName ? "More than one account has this name. Choose an existing account to continue." :
+    namedBuyer && !resolvedCustomerId && !newBuyer ? "Enter the buyer’s name." :
+    total > floor && !namedBuyer ? "Choose a customer or agent for the remaining balance." : ""
+  const discountError = discount > subtotal ? "Discount cannot exceed the subtotal." : total < floor ?
+    `The new total cannot go below ${money(floor)}, which is already paid or credited. Record a return to give money back.` : ""
+  const unchanged = lines.length === detail.lines.length && discount === sale.discount &&
+    (resolvedCustomerId ?? null) === sale.customer_id && (namedBuyer ? enteredName : "Walk-in customer") === (sale.customer_id ? sale.customer_name : "Walk-in customer") &&
+    buyerType === sale.buyer_type && lines.every(line => {
+      const prior = detail.lines.find(item => item.id === line.lineId)
+      return prior && prior.quantity === line.quantity && prior.price === line.price && prior.serial === line.serial
+    })
+  const search = query.trim().toLowerCase()
+  const choices = data.products.filter(product => product.active && (!search || [product.name, product.sku].join(" ").toLowerCase().includes(search))).slice(0, 8)
+  const pending = data.approvals.some(approval => approval.kind === "Sale edit" && approval.status === "Pending" && approval.summary.saleNumber === sale.number)
+  function update(key: string, patch: Partial<EditLine>) {
+    setLines(current => current.map(line => line.key === key ? { ...line, ...patch } : line))
+  }
+  function addProduct(product: Product) {
+    if (roomFor(product.id) < 1 || lines.length >= 100) return
+    const shelf = lookupPrice(product)
+    setLines(current => {
+      const match = current.find(line => line.productId === product.id && !line.serial && line.price === shelf)
+      if (match) return current.map(line => line === match ? { ...line, quantity: line.quantity + 1 } : line)
+      return [...current, { key: String(++sequence.current), productId: product.id, name: product.name, unit: product.unit, quantity: 1, price: shelf, returned: 0, serial: "" }]
+    })
+  }
+  const blocked = !lines.length || pending || unchanged || Boolean(stockError || discountError || customerError) || (!direct && !reason.trim())
+  return <Form close={close} label={direct ? "Save sale" : "Send for approval"} busyLabel={direct ? "Saving sale…" : "Sending request…"}
+    submitDisabled={blocked} footerSummary={<><small>New total</small><strong>{money(Math.max(0, total))}</strong><span>Was {money(sale.total)}</span></>}
+    onSave={() => {
+      if (blocked) throw new Error(stockError || discountError || customerError || (pending ? "This sale already has an edit waiting for approval." : !direct && !reason.trim() ? "Write why this sale needs to change." : "Change the buyer, items, prices or discount before saving."))
+      return save({
+        action: "editSale", saleId: sale.id, requestId: requestId.current, reason: reason.trim(),
+        customerId: resolvedCustomerId, buyerType, ...(newBuyer ? { newBuyer } : {}),
+        lines: lines.map(line => ({ lineId: line.lineId, productId: line.productId, quantity: line.quantity, price: line.price, serial: line.serial.trim() })),
+        discount, expectedTotal: total
+      }, direct ? "Sale updated" : "Sale edit sent for approval")
+    }}>
+    <p className="checkout-hint">{sale.number} · {sale.invoice} · {direct ? "Saving updates this invoice now. Payments already recorded stay as they are." : "Admin approves this edit before the invoice, stock or installation changes."}</p>
+    {pending && <ErrorLine message="This sale already has an edit waiting for approval." />}
+    <CheckoutBuyer type={buyerType} name={buyer?.name || buyerName} account={buyer} ambiguousName={ambiguousName} customers={data.customers}
+      onType={type => { setBuyerType(type); setCustomer(""); setBuyerName("") }}
+      onName={name => { setBuyerName(name); setCustomer("") }}
+      onSelect={customer => { setBuyerName(customer.name); setCustomer(customer.id); setBuyerType(customer.kind === "Agent" ? "Agent" : "Customer") }} />
+    <div className="sale-cart-items">
+      {lines.map(line => {
+        const product = productMap.get(line.productId)
+        const canIncrease = line.quantity < 100000 && !(line.serial && line.quantity >= 1) && roomFor(line.productId) > 0
+        return <div className="sale-cart-line" key={line.key}>
+          <div className="cart-name">
+            <div className="sale-line-identity">
+              {product && <ProductPhoto product={product} />}
+              <div><strong>{line.name}</strong><small>{[product?.sku, line.returned > 0 ? num(line.returned) + " returned" : "", product?.type === "Stocked" ? num(roomFor(line.productId)) + " more available" : ""].filter(Boolean).join(" · ")}</small></div>
+            </div>
+            {product?.type === "Stocked" && line.quantity === 1 && <input aria-label={"Serial number for " + line.name} placeholder="Serial (optional)"
+              value={line.serial} maxLength={100} onChange={event => update(line.key, { serial: event.target.value })} />}
+          </div>
+          <div className="sale-line-quantity">
+            <span className="sale-line-label">Qty ({line.unit})</span>
+            <div className="quantity-stepper">
+              <button type="button" disabled={line.quantity <= Math.max(1, line.returned)} aria-label={"Decrease " + line.name + " quantity"}
+                onClick={() => update(line.key, { quantity: line.quantity - 1 })}><Minus size={14} /></button>
+              <input aria-label={"Quantity for " + line.name} type="number" min={Math.max(1, line.returned)} max="100000" required value={line.quantity || ""}
+                onChange={event => {
+                  const quantity = Math.min(100000, Math.max(Math.max(1, line.returned), Math.round(event.target.valueAsNumber || 0)))
+                  update(line.key, { quantity, ...(quantity === 1 ? {} : { serial: "" }) })
+                }} />
+              <button type="button" disabled={!canIncrease} aria-label={"Increase " + line.name + " quantity"}
+                onClick={() => update(line.key, { quantity: line.quantity + 1 })}><Plus size={14} /></button>
+            </div>
+          </div>
+          <Field label="Unit price (TZS)"><input aria-label={"Unit price for " + line.name} type="number" min="0" max="9999999999" required value={line.price}
+            onChange={event => update(line.key, { price: Math.round(event.target.valueAsNumber || 0) })} /></Field>
+          <strong className="line-total">{money(line.quantity * line.price)}</strong>
+          <div className="sale-line-actions">
+            <button className="icon-btn" type="button" disabled={line.returned > 0} aria-label={"Remove " + line.name}
+              title={line.returned > 0 ? "Returned units have to stay on the sale" : "Remove item"}
+              onClick={() => setLines(current => current.filter(item => item.key !== line.key))}><Trash2 size={16} /></button>
+          </div>
+        </div>
+      })}
+    </div>
+    <Field label="Add an item" hint="Search by name or SKU, then choose the item.">
+      <input value={query} placeholder="Search products" onChange={event => setQuery(event.target.value)} />
+    </Field>
+    {query.trim() && <div className="detail-actions">{choices.length ? choices.map(product => <button key={product.id} type="button" className="button secondary small"
+      disabled={roomFor(product.id) < 1} onClick={() => { addProduct(product); setQuery("") }}>{product.name} · {money(lookupPrice(product))}</button>) :
+      <p className="checkout-hint">No matching product.</p>}</div>}
+    <div className="form-grid">
+      <Field label="Discount (TZS)"><input type="number" min="0" max="9999999999" value={discount} onChange={event => setDiscount(Math.round(event.target.valueAsNumber || 0))} /></Field>
+      {sale.tax > 0 && <Field label="Tax (TZS)" hint="Tax recorded on the original sale stays as it is."><input value={sale.tax} readOnly /></Field>}
+    </div>
+    {!direct && <Field label="Why does this sale need to change?" hint="Admin reads this before approving. The customer never sees it.">
+      <textarea rows={3} maxLength={300} value={reason} onChange={event => setReason(event.target.value)} placeholder="Wrong item, agreed price, or the buyer was recorded under the wrong account" />
+    </Field>}
+    <ErrorLine message={stockError || discountError || customerError} />
+    {unchanged && !stockError && !discountError && !customerError && <p className="checkout-hint">Change the buyer, items, prices or discount before saving.</p>}
   </Form>
 }
 

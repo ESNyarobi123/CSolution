@@ -31,8 +31,8 @@ export const capabilityGroups: { name: string; items: { key: Capability; label: 
   { name: "Sales & documents", items: [
     { key: "sales", label: "Create sales, quotations, invoices and receipts" },
     { key: "allSales", label: "See every staff member's sales" },
-    { key: "pricing", label: "Change prices and give discounts without approval" },
-    { key: "requestApprovals", label: "Request approval for a discount, credit or return" },
+    { key: "pricing", label: "Change prices, edit recorded sales and give discounts without approval" },
+    { key: "requestApprovals", label: "Request approval for a discount, credit, return or sale edit" },
     { key: "reviewApprovals", label: "Approve or reject those requests" }
   ]},
   { name: "Customers & agents", items: [

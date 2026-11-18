@@ -22,7 +22,7 @@ export type Panel =
   { kind:"productStatus"; id:string; title:string; active:boolean } |
   { kind:"staffStatus"; id:string; title:string; active:boolean } |
   { kind:"sale"|"quote"; record?:Quote } | { kind:"purchase"|"settings"|"search" } |
-  { kind:"saleDetail"|"invoice"|"receipt"|"payment"|"return"|"jobDetail"|"material"|"jobStatus"; id:string } |
+  { kind:"saleDetail"|"invoice"|"receipt"|"payment"|"return"|"editSale"|"jobDetail"|"material"|"jobStatus"; id:string } |
   { kind:"quoteDetail"; record:Quote }
 
 type Props = { data: Snapshot; open: (panel: Panel) => void }
@@ -165,7 +165,7 @@ export function Inventory({ data,open,initialLow = false }: Props & { initialLow
       ]} />}
   </>
 }
-function salesColumns(open: Props["open"], invoice: boolean): Column<Sale>[] {
+function salesColumns(open: Props["open"], invoice: boolean, canEdit: boolean): Column<Sale>[] {
   return [
     {label:invoice?"Invoice":"Sale ID",cell:s=><TextLink run={()=>open({kind:invoice?"invoice":"saleDetail",id:s.id})}>{invoice?s.invoice:s.number}</TextLink>},
     {label:"Customer",cell:s=><span className="customer-cell"><span className="avatar mini">{initials(s.customer_name)}</span><span>{s.customer_name}<small className="table-sub">{s.buyer_type}</small></span></span>},
@@ -175,6 +175,7 @@ function salesColumns(open: Props["open"], invoice: boolean): Column<Sale>[] {
     {label:"Balance",cell:s=>money(s.balance),numeric:true},{label:"Status",cell:s=><Badge value={s.status} />},
     rowActions<Sale>(s=>invoice?s.invoice:s.number,s=>[
       {label:"View sale",icon:Eye,run:()=>open({kind:"saleDetail",id:s.id})},
+      ...(canEdit ? [editAction("Edit sale", ()=>open({kind:"editSale",id:s.id}))] : []),
       {label:"View invoice",icon:FileText,run:()=>open({kind:"invoice",id:s.id})},
       ...(s.paid>0 ? [{label:"View receipt",icon:ReceiptText,run:()=>open({kind:"receipt",id:s.id})}] : []),
       ...(s.balance>0 ? [{label:"Record payment",icon:Wallet,run:()=>open({kind:"payment",id:s.id})}] : [])
@@ -254,7 +255,7 @@ export function Sales({ data,open,balancesOnly = false }: Props & { balancesOnly
           {item} <span>{num(counts[item])}</span>
         </button>)}
       </div>}
-      <Table key={[query,period,from,to,type,status,sort].join("|")} rows={results} columns={salesColumns(open,false)}
+      <Table key={[query,period,from,to,type,status,sort].join("|")} rows={results} columns={salesColumns(open,false,can(data.user.role,"pricing")||can(data.user.role,"requestApprovals"))}
         empty={available.length ? "No sales match these filters" : balancesOnly ? "No invoices with an open balance" : "No sales recorded yet"} />
     </article>
   </div>
@@ -327,7 +328,7 @@ export function Documents({ data,open,page,go }: Props & { page:string; go:(page
           ] : [])
         ])
       ]} /> : <Table rows={sales} key={JSON.stringify(filters)} empty={size ? "No documents match these filters" : "No documents yet"}
-        columns={tab==="invoices" ? salesColumns(open,true) : [
+        columns={tab==="invoices" ? salesColumns(open,true,false) : [
           {label:"Receipt",cell:s=><TextLink run={()=>open({kind:"receipt",id:s.id})}>RC-{s.number}</TextLink>},
           {label:"Buyer",cell:s=>buyerLabel(s.customer_name,s.buyer_type)},{label:"Invoice",cell:s=>s.invoice},
           {label:"Last payment",cell:s=>date(s.last_payment_at)},

@@ -77,7 +77,7 @@ export function Approvals({ data,open,approvedOnly }: WorkspaceProps & { approve
     </button>)}</div>
     <Table key={filter} rows={visible} empty="No matching approval requests" columns={[
       {label:"Request",cell:approval=><button className="text-button" type="button" onClick={()=>open({kind:"approvalDetail",id:approval.id})}>
-        {approval.kind==="Return" ? "Return · "+approval.summary.saleNumber : "Sale terms · "+approval.summary.buyer}
+        {approval.kind==="Return" ? "Return · "+approval.summary.saleNumber : approval.kind==="Sale edit" ? "Sale edit · "+(approval.summary.saleNumber ?? approval.summary.buyer) : "Sale terms · "+approval.summary.buyer}
       </button>},
       ...(admin ? [{label:"Requested by",cell:(approval: Approval)=>approval.requester}] : []),
       {label:"Date",cell:approval=>date(approval.created_at)},
@@ -96,6 +96,7 @@ export function ApprovalDetail({ approval, data, open, close, save }: WorkspaceP
   const [decision,setDecision] = useState("")
   const admin = can(data.user.role,"reviewApprovals")
   const isReturn = approval.kind==="Return"
+  const isEdit = approval.kind==="Sale edit"
   const { summary } = approval
   const recordSale = decision==="record"
   const saleDate = summary.soldOn ?? shopDay(approval.created_at)
@@ -106,7 +107,8 @@ export function ApprovalDetail({ approval, data, open, close, save }: WorkspaceP
       <p>{approval.requester} · {date(approval.created_at)}{summary.saleNumber && " · "+summary.saleNumber}</p></div><Badge value={approval.status} /></div>
     <dl className="details-list">
       <div><dt>Reason</dt><dd className="approval-note">{approval.reason}</dd></div>
-      {!isReturn && <div><dt>Sale date</dt><dd>{date(saleDate)}</dd></div>}
+      {!isReturn && <div><dt>{isEdit ? "Original sale date" : "Sale date"}</dt><dd>{date(saleDate)}</dd></div>}
+      {isEdit && summary.previousBuyer && summary.previousBuyer!==summary.buyer && <div><dt>Buyer was</dt><dd>{summary.previousBuyer}</dd></div>}
       {approval.reviewer && <div><dt>Reviewed by</dt><dd>{approval.reviewer} · {date(approval.reviewed_at)}</dd></div>}
       {approval.review_note && <div><dt>Decision note</dt><dd className="approval-note">{approval.review_note}</dd></div>}
     </dl>
@@ -124,6 +126,11 @@ export function ApprovalDetail({ approval, data, open, close, save }: WorkspaceP
         <div><small>Credit against invoice</small><strong>{money(summary.credit ?? 0)}</strong></div>
         <div><small>Refund to customer</small><strong>{money(summary.refund ?? 0)}</strong></div>
         <div><small>Return to stock</small><strong>{summary.restock ? "Yes" : "No"}</strong></div>
+      </> : isEdit ? <>
+        <div><small>Current total</small><strong>{money(summary.previousTotal ?? 0)}</strong></div>
+        <div><small>New total</small><strong>{money(summary.total)}</strong></div>
+        <div><small>Discount</small><strong>{money(summary.discount)}</strong></div>
+        <div><small>Balance after edit</small><strong>{money(summary.balance ?? summary.total-summary.paid)}</strong></div>
       </> : <>
         <div><small>Sale total</small><strong>{money(summary.total)}</strong></div>
         <div><small>Discount</small><strong>{money(summary.discount)}</strong></div>
@@ -131,30 +138,31 @@ export function ApprovalDetail({ approval, data, open, close, save }: WorkspaceP
         <div><small>Balance due</small><strong>{money(summary.total-summary.paid)}</strong></div>
       </>}
     </div>
-    {!isReturn && (summary.paid>0 || summary.dueDate) && <p className="checkout-hint">
+    {!isReturn && !isEdit && (summary.paid>0 || summary.dueDate) && <p className="checkout-hint">
       {summary.paid>0 && summary.method}{summary.paid>0 && summary.dueDate && " · "}{summary.dueDate && "Balance due "+date(summary.dueDate)}
     </p>}
   </div>
   if (admin && approval.status==="Pending") {
     return <Form close={close} submitDisabled={!decision}
-      label={decision==="reject" ? "Reject request" : isReturn ? "Approve and record return" : recordSale ? "Approve and record sale" : "Approve terms"}
+      label={decision==="reject" ? "Reject request" : isEdit ? "Approve and update sale" : isReturn ? "Approve and record return" : recordSale ? "Approve and record sale" : "Approve terms"}
       onSave={form=>save({action:"reviewApproval",id:approval.id,decision:recordSale ? "approve" : decision,recordSale,note:val(form,"note")},
-        decision==="reject" ? "Request rejected" : recordSale ? "Sale approved and recorded" : isReturn ? "Return recorded" : "Terms approved · sale awaiting completion")}>
+        decision==="reject" ? "Request rejected" : isEdit ? "Sale updated" : recordSale ? "Sale approved and recorded" : isReturn ? "Return recorded" : "Terms approved · sale awaiting completion")}>
       {detail}
       <Field label="Decision"><Select value={decision} required onChange={event=>setDecision(event.target.value)}>
         <option value="">Choose a decision</option>
-        {isReturn ? <option value="approve">Approve and record return</option> : <>
+        {isReturn ? <option value="approve">Approve and record return</option> : isEdit ? <option value="approve">Approve and update sale</option> : <>
           <option value="record">Approve and record sale</option><option value="approve">Approve terms only</option>
         </>}
         <option value="reject">Reject</option>
       </Select></Field>
       <Field label="Decision note"><textarea name="note" rows={2} maxLength={2000} required={decision==="reject"} /></Field>
       {decision==="approve" && isReturn && <p className="checkout-hint">Approval records the return, any refund and the selected stock adjustment.</p>}
-      {decision==="approve" && !isReturn && <p className="checkout-hint">The sale appears in reports once Admin or Front Office completes it.</p>}
+      {decision==="approve" && isEdit && <p className="checkout-hint">Approval updates the invoice, stock and any linked installation. Payments already recorded stay as they are.</p>}
+      {decision==="approve" && !isReturn && !isEdit && <p className="checkout-hint">The sale appears in reports once Admin or Front Office completes it.</p>}
       {recordSale && confirmPayment}
     </Form>
   }
-  if (!isReturn && approval.status==="Approved") {
+  if (approval.kind==="Sale terms" && approval.status==="Approved") {
     return <Form close={close} label="Complete approved sale" onSave={()=>save({action:"completeApprovedSale",id:approval.id},"Approved sale completed")}>
       {detail}
       {confirmPayment}
